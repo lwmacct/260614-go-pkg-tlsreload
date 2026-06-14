@@ -1,0 +1,24 @@
+# Pre-commit hooks configuration
+# See https://pre-commit.com for more information
+
+# 全局配置
+default_stages: [pre-commit]
+fail_fast: true # 发现第一个错误即停止
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+
+  - repo: local
+    hooks:
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run
+        language: system
+        pass_filenames: false
+        always_run: true
