@@ -28,7 +28,11 @@ func TestManagerReloadsCertificate(t *testing.T) {
 		Version: "1",
 	})
 
-	manager, err := NewManager(ctx, source, ManagerOptions{Watch: true, RetryInterval: 10 * time.Millisecond})
+	manager, err := NewManager(ctx, source, ManagerOptions{
+		AutoReload:     true,
+		ReloadInterval: 10 * time.Millisecond,
+		RetryInterval:  10 * time.Millisecond,
+	})
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -41,7 +45,6 @@ func TestManagerReloadsCertificate(t *testing.T) {
 		KeyPEM:  key2,
 		Version: "2",
 	})
-	source.notify("2")
 
 	require.Eventually(t, func() bool {
 		current, err := manager.GetCertificate(nil)
@@ -60,7 +63,11 @@ func TestManagerKeepsPreviousCertificateOnInvalidReload(t *testing.T) {
 		Version: "1",
 	})
 
-	manager, err := NewManager(ctx, source, ManagerOptions{Watch: true, RetryInterval: 10 * time.Millisecond})
+	manager, err := NewManager(ctx, source, ManagerOptions{
+		AutoReload:     true,
+		ReloadInterval: 10 * time.Millisecond,
+		RetryInterval:  10 * time.Millisecond,
+	})
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -72,7 +79,6 @@ func TestManagerKeepsPreviousCertificateOnInvalidReload(t *testing.T) {
 		KeyPEM:  []byte("bad key"),
 		Version: "2",
 	})
-	source.notify("2")
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -86,16 +92,26 @@ func TestNewManagerRequiresSource(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestNewManagerRejectsAutoReloadWithoutInterval(t *testing.T) {
+	cert, key := mustGenerateTLSPair(t, "invalid-reload-interval")
+	source := newStubSource(SourceData{
+		CertPEM: cert,
+		KeyPEM:  key,
+		Version: "1",
+	})
+
+	_, err := NewManager(t.Context(), source, ManagerOptions{AutoReload: true})
+	require.Error(t, err)
+}
+
 type stubSource struct {
-	mu      sync.RWMutex
-	data    SourceData
-	changes chan string
+	mu   sync.RWMutex
+	data SourceData
 }
 
 func newStubSource(data SourceData) *stubSource {
 	return &stubSource{
-		data:    data,
-		changes: make(chan string, 8),
+		data: data,
 	}
 }
 
@@ -107,27 +123,12 @@ func (s *stubSource) Load(context.Context) (SourceData, error) {
 	return s.data, nil
 }
 
-func (s *stubSource) Watch(ctx context.Context, _ string, notify func(nextVersion string)) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case version := <-s.changes:
-			notify(version)
-		}
-	}
-}
-
 func (s *stubSource) Close() error { return nil }
 
 func (s *stubSource) setData(data SourceData) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data = data
-}
-
-func (s *stubSource) notify(version string) {
-	s.changes <- version
 }
 
 func mustGenerateTLSPair(t *testing.T, commonName string) ([]byte, []byte) {

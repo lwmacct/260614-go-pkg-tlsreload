@@ -26,8 +26,8 @@ func ExampleManager() {
 	}}
 
 	manager, err := NewManager(ctx, source, ManagerOptions{
-		Watch:         true,
-		RetryInterval: 3 * time.Second,
+		AutoReload:     true,
+		ReloadInterval: 3 * time.Second,
 	})
 	if err != nil {
 		return
@@ -49,11 +49,6 @@ func (s *exampleSource) Name() string { return "example" }
 
 func (s *exampleSource) Load(context.Context) (SourceData, error) {
 	return s.data, nil
-}
-
-func (s *exampleSource) Watch(ctx context.Context, _ string, notify func(nextVersion string)) error {
-	<-ctx.Done()
-	return ctx.Err()
 }
 
 func (s *exampleSource) Close() error { return nil }

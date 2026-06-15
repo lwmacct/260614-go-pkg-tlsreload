@@ -14,6 +14,27 @@ func TestNewFileSourceRequiresPaths(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestNewFileSourceNormalizesPaths(t *testing.T) {
+	source, err := NewFileSource(FileSourceConfig{
+		CertFile: " cert.pem ",
+		KeyFile:  " key.pem ",
+	})
+	require.NoError(t, err)
+
+	fileSource, ok := source.(*fileSource)
+	require.True(t, ok)
+	require.Equal(t, "cert.pem", fileSource.certFile)
+	require.Equal(t, "key.pem", fileSource.keyFile)
+}
+
+func TestNewFileSourceRejectsURIPaths(t *testing.T) {
+	_, err := NewFileSource(FileSourceConfig{
+		CertFile: "file:///cert.pem",
+		KeyFile:  "key.pem",
+	})
+	require.Error(t, err)
+}
+
 func TestFileSourceKeepsPreviousCertificateDuringPartialUpdate(t *testing.T) {
 	ctx := t.Context()
 	dir := t.TempDir()
@@ -27,13 +48,16 @@ func TestFileSourceKeepsPreviousCertificateDuringPartialUpdate(t *testing.T) {
 	require.NoError(t, os.WriteFile(keyFile, key1, 0o600))
 
 	source, err := NewFileSource(FileSourceConfig{
-		CertFile:      certFile,
-		KeyFile:       keyFile,
-		WatchInterval: 10 * time.Millisecond,
+		CertFile: certFile,
+		KeyFile:  keyFile,
 	})
 	require.NoError(t, err)
 
-	manager, err := NewManager(ctx, source, ManagerOptions{Watch: true, RetryInterval: 10 * time.Millisecond})
+	manager, err := NewManager(ctx, source, ManagerOptions{
+		AutoReload:     true,
+		ReloadInterval: 10 * time.Millisecond,
+		RetryInterval:  10 * time.Millisecond,
+	})
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -55,4 +79,26 @@ func TestFileSourceKeepsPreviousCertificateDuringPartialUpdate(t *testing.T) {
 		require.NoError(t, err)
 		return string(current.Certificate[0]) == string(mustParseKeyPair(t, cert2, key2).Certificate[0])
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestNewFileManagerBuildsFileBackedManager(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	certFile := filepath.Join(dir, "fullchain.pem")
+	keyFile := filepath.Join(dir, "privkey.pem")
+	cert, key := mustGenerateTLSPair(t, "file-manager")
+
+	require.NoError(t, os.WriteFile(certFile, cert, 0o600))
+	require.NoError(t, os.WriteFile(keyFile, key, 0o600))
+
+	manager, err := NewFileManager(ctx, FileManagerOptions{
+		CertFile: certFile,
+		KeyFile:  keyFile,
+	})
+	require.NoError(t, err)
+	defer manager.Close()
+
+	current, err := manager.GetCertificate(nil)
+	require.NoError(t, err)
+	require.Equal(t, mustParseKeyPair(t, cert, key).Certificate[0], current.Certificate[0])
 }

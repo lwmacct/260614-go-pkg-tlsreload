@@ -6,7 +6,6 @@ import "context"
 type Source interface {
 	Name() string
 	Load(ctx context.Context) (SourceData, error)
-	Watch(ctx context.Context, currentVersion string, notify func(nextVersion string)) error
 	Close() error
 }
 

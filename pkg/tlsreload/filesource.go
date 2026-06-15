@@ -6,37 +6,36 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 )
 
 // FileSourceConfig describes a certificate/key pair on local disk.
 type FileSourceConfig struct {
-	CertFile      string
-	KeyFile       string
-	WatchInterval time.Duration
+	CertFile string
+	KeyFile  string
 }
-
-const defaultFileWatchInterval = 3 * time.Second
 
 // NewFileSource builds a Source that reads PEM files from disk.
 func NewFileSource(config FileSourceConfig) (Source, error) {
-	if strings.TrimSpace(config.CertFile) == "" || strings.TrimSpace(config.KeyFile) == "" {
+	certFile, err := normalizeTLSFilePath(config.CertFile)
+	if err != nil {
+		return nil, fmt.Errorf("cert file: %w", err)
+	}
+	keyFile, err := normalizeTLSFilePath(config.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("key file: %w", err)
+	}
+	if certFile == "" || keyFile == "" {
 		return nil, errors.New("tls file source requires both cert file and key file")
 	}
-	if config.WatchInterval <= 0 {
-		config.WatchInterval = defaultFileWatchInterval
-	}
 	return &fileSource{
-		certFile:      config.CertFile,
-		keyFile:       config.KeyFile,
-		watchInterval: config.WatchInterval,
+		certFile: certFile,
+		keyFile:  keyFile,
 	}, nil
 }
 
 type fileSource struct {
-	certFile      string
-	keyFile       string
-	watchInterval time.Duration
+	certFile string
+	keyFile  string
 }
 
 func (s *fileSource) Name() string { return "files" }
@@ -53,28 +52,6 @@ func (s *fileSource) Load(context.Context) (SourceData, error) {
 	}, nil
 }
 
-func (s *fileSource) Watch(ctx context.Context, currentVersion string, notify func(nextVersion string)) error {
-	ticker := time.NewTicker(s.watchInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			data, err := s.Load(ctx)
-			if err != nil {
-				return err
-			}
-			if data.Version == currentVersion {
-				continue
-			}
-			currentVersion = data.Version
-			notify(data.Version)
-		}
-	}
-}
-
 func (s *fileSource) Close() error { return nil }
 
 func readTLSFiles(certFile, keyFile string) ([]byte, []byte, error) {
@@ -89,4 +66,15 @@ func readTLSFiles(certFile, keyFile string) ([]byte, []byte, error) {
 		return nil, nil, fmt.Errorf("read tls key file: %w", err)
 	}
 	return certPEM, keyPEM, nil
+}
+
+func normalizeTLSFilePath(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", nil
+	}
+	if strings.Contains(trimmed, "://") {
+		return "", errors.New("tls file path must not use a URI scheme")
+	}
+	return trimmed, nil
 }

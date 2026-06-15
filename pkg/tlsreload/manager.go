@@ -13,16 +13,18 @@ import (
 
 // ManagerOptions controls runtime reload behavior.
 type ManagerOptions struct {
-	Watch         bool
-	RetryInterval time.Duration
-	Logger        *slog.Logger
+	AutoReload     bool
+	ReloadInterval time.Duration
+	RetryInterval  time.Duration
+	Logger         *slog.Logger
 }
 
 // Manager serves the latest valid TLS certificate from a Source.
 type Manager struct {
-	source        Source
-	logger        *slog.Logger
-	retryInterval time.Duration
+	source         Source
+	logger         *slog.Logger
+	reloadInterval time.Duration
+	retryInterval  time.Duration
 
 	reloadMu    sync.Mutex
 	certificate atomic.Pointer[tls.Certificate]
@@ -34,10 +36,13 @@ type Manager struct {
 	wg     sync.WaitGroup
 }
 
-// NewManager loads the initial certificate and optionally starts a watch loop.
+// NewManager loads the initial certificate and optionally starts a reload loop.
 func NewManager(ctx context.Context, source Source, options ManagerOptions) (*Manager, error) {
 	if source == nil {
 		return nil, errors.New("tls manager requires source")
+	}
+	if options.AutoReload && options.ReloadInterval <= 0 {
+		return nil, errors.New("tls manager reload interval must be greater than zero when auto reload is enabled")
 	}
 	if options.RetryInterval <= 0 {
 		options.RetryInterval = 2 * time.Second
@@ -45,10 +50,11 @@ func NewManager(ctx context.Context, source Source, options ManagerOptions) (*Ma
 
 	managerCtx, cancel := context.WithCancel(ctx)
 	manager := &Manager{
-		source:        source,
-		logger:        options.Logger,
-		retryInterval: options.RetryInterval,
-		cancel:        cancel,
+		source:         source,
+		logger:         options.Logger,
+		reloadInterval: options.ReloadInterval,
+		retryInterval:  options.RetryInterval,
+		cancel:         cancel,
 	}
 
 	if err := manager.reload(managerCtx); err != nil {
@@ -57,9 +63,9 @@ func NewManager(ctx context.Context, source Source, options ManagerOptions) (*Ma
 		return nil, err
 	}
 
-	if options.Watch {
+	if options.AutoReload {
 		manager.wg.Go(func() {
-			manager.watchLoop(managerCtx)
+			manager.reloadLoop(managerCtx)
 		})
 	}
 
@@ -103,27 +109,21 @@ func (m *Manager) Version() string {
 	return m.currentVersion()
 }
 
-func (m *Manager) watchLoop(ctx context.Context) {
+func (m *Manager) reloadLoop(ctx context.Context) {
+	timer := time.NewTimer(m.reloadInterval)
+	defer timer.Stop()
+
 	for {
-		err := m.source.Watch(ctx, m.currentVersion(), func(nextVersion string) {
-			if err := m.reload(ctx); err != nil {
-				m.logError("reload tls certificate failed", "version", nextVersion, "error", err)
-				return
-			}
-			m.logInfo("tls certificate reloaded", "version", nextVersion)
-		})
-		if ctx.Err() != nil {
-			return
-		}
-
-		m.logError("tls watch stopped", "error", err)
-
-		timer := time.NewTimer(m.retryInterval)
 		select {
 		case <-ctx.Done():
-			timer.Stop()
 			return
 		case <-timer.C:
+			if err := m.reloadIfChanged(ctx); err != nil {
+				m.logError("reload tls certificate failed", "error", err)
+				timer.Reset(m.retryInterval)
+				continue
+			}
+			timer.Reset(m.reloadInterval)
 		}
 	}
 }
@@ -145,6 +145,29 @@ func (m *Manager) reload(ctx context.Context) error {
 	m.certificate.Store(&certificate)
 	m.setCurrentVersion(data.Version)
 	m.logInfo("tls certificate loaded", "version", data.Version)
+	return nil
+}
+
+func (m *Manager) reloadIfChanged(ctx context.Context) error {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+
+	data, err := m.source.Load(ctx)
+	if err != nil {
+		return err
+	}
+	if data.Version != "" && data.Version == m.currentVersion() {
+		return nil
+	}
+
+	certificate, err := tls.X509KeyPair(data.CertPEM, data.KeyPEM)
+	if err != nil {
+		return fmt.Errorf("load tls certificate: %w", err)
+	}
+
+	m.certificate.Store(&certificate)
+	m.setCurrentVersion(data.Version)
+	m.logInfo("tls certificate reloaded", "version", data.Version)
 	return nil
 }
 
