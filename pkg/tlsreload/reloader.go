@@ -106,6 +106,15 @@ func New(ctx context.Context, config Config) (*Reloader, error) {
 	return reloader, nil
 }
 
+// MustNew is like New but panics if the Reloader cannot be created.
+func MustNew(ctx context.Context, config Config) *Reloader {
+	reloader, err := New(ctx, config)
+	if err != nil {
+		panic(err)
+	}
+	return reloader
+}
+
 // Reload forces an immediate certificate refresh.
 func (r *Reloader) Reload(ctx context.Context) error {
 	if r == nil {

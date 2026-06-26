@@ -37,15 +37,12 @@ import (
 func main() {
 	ctx := context.Background()
 
-	reloader, err := tlsreload.New(ctx, tlsreload.Config{
+	reloader := tlsreload.MustNew(ctx, tlsreload.Config{
 		CertFile:       "/etc/ssl/fullchain.pem",
 		KeyFile:        "/etc/ssl/privkey.pem",
 		MinVersion:     tls.VersionTLS12,
 		ReloadInterval: 3 * time.Second,
 	})
-	if err != nil {
-		panic(err)
-	}
 	defer reloader.Close()
 
 	server := &http.Server{
@@ -90,6 +87,7 @@ type Config struct {
 
 ```go
 reloader, err := tlsreload.New(ctx, config)
+reloader = tlsreload.MustNew(ctx, config)
 tlsConfig := reloader.TLSConfig()
 err = reloader.Reload(ctx)
 version := reloader.Version()

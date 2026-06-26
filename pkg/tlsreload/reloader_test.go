@@ -21,6 +21,12 @@ func TestNewRequiresPaths(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestMustNewPanicsOnError(t *testing.T) {
+	require.Panics(t, func() {
+		MustNew(t.Context(), Config{})
+	})
+}
+
 func TestNewNormalizesPaths(t *testing.T) {
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "fullchain.pem")
@@ -38,6 +44,25 @@ func TestNewNormalizesPaths(t *testing.T) {
 
 	require.Equal(t, certFile, reloader.certFile)
 	require.Equal(t, keyFile, reloader.keyFile)
+}
+
+func TestMustNewReturnsReloader(t *testing.T) {
+	dir := t.TempDir()
+	certFile := filepath.Join(dir, "fullchain.pem")
+	keyFile := filepath.Join(dir, "privkey.pem")
+	cert, key := mustGenerateTLSPair(t, "must-new")
+	require.NoError(t, os.WriteFile(certFile, cert, 0o600))
+	require.NoError(t, os.WriteFile(keyFile, key, 0o600))
+
+	reloader := MustNew(t.Context(), Config{
+		CertFile: certFile,
+		KeyFile:  keyFile,
+	})
+	defer reloader.Close()
+
+	current, err := reloader.GetCertificate(nil)
+	require.NoError(t, err)
+	require.NotNil(t, current)
 }
 
 func TestNewRejectsURIPaths(t *testing.T) {
