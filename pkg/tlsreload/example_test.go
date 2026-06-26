@@ -10,48 +10,48 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"os"
+	"path/filepath"
 	"time"
 )
 
-func ExampleManager() {
+func ExampleReloader() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	dir, err := os.MkdirTemp("", "tlsreload-example-*")
+	if err != nil {
+		return
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	certFile := filepath.Join(dir, "fullchain.pem")
+	keyFile := filepath.Join(dir, "privkey.pem")
 	certPEM, keyPEM := mustExampleTLSPair()
+	if writeErr := os.WriteFile(certFile, certPEM, 0o600); writeErr != nil {
+		return
+	}
+	if writeErr := os.WriteFile(keyFile, keyPEM, 0o600); writeErr != nil {
+		return
+	}
 
-	source := &exampleSource{data: SourceData{
-		CertPEM: certPEM,
-		KeyPEM:  keyPEM,
-		Version: "1",
-	}}
-
-	manager, err := NewManager(ctx, source, ManagerOptions{
-		AutoReload:     true,
+	reloader, err := New(ctx, Config{
+		CertFile:       certFile,
+		KeyFile:        keyFile,
 		ReloadInterval: 3 * time.Second,
+		MinVersion:     tls.VersionTLS12,
 	})
 	if err != nil {
 		return
 	}
-	defer manager.Close()
+	defer reloader.Close()
 
-	cfg := manager.TLSConfig(tls.VersionTLS12)
+	cfg := reloader.TLSConfig()
 	fmt.Println(cfg.GetCertificate != nil && cfg.MinVersion == tls.VersionTLS12)
 
 	// Output:
 	// true
 }
-
-type exampleSource struct {
-	data SourceData
-}
-
-func (s *exampleSource) Name() string { return "example" }
-
-func (s *exampleSource) Load(context.Context) (SourceData, error) {
-	return s.data, nil
-}
-
-func (s *exampleSource) Close() error { return nil }
 
 func mustExampleTLSPair() ([]byte, []byte) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
