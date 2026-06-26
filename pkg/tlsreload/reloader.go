@@ -7,16 +7,20 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // Config controls file-backed TLS certificate loading and reload behavior.
 type Config struct {
-	CertFile       string
-	KeyFile        string
+	CertFile string
+	KeyFile  string
+	// ReloadInterval is a fallback poll interval; file system events are always used when available.
 	ReloadInterval time.Duration
 	RetryInterval  time.Duration
 	MinVersion     uint16
@@ -31,6 +35,7 @@ type Reloader struct {
 	retryInterval  time.Duration
 	minVersion     uint16
 	logger         *slog.Logger
+	watcher        *fsnotify.Watcher
 
 	reloadMu sync.Mutex
 	current  atomic.Pointer[snapshot]
@@ -45,7 +50,7 @@ type snapshot struct {
 	version     string
 }
 
-// New loads the initial certificate and starts background reloads when ReloadInterval is greater than zero.
+// New loads the initial certificate, watches certificate files for changes, and uses ReloadInterval as a fallback poll interval when greater than zero.
 func New(ctx context.Context, config Config) (*Reloader, error) {
 	certFile, err := normalizeTLSFilePath(config.CertFile)
 	if err != nil {
@@ -79,14 +84,22 @@ func New(ctx context.Context, config Config) (*Reloader, error) {
 		cancel:         cancel,
 	}
 
-	if err := reloader.Reload(reloaderCtx); err != nil {
+	err = reloader.Reload(reloaderCtx)
+	if err != nil {
 		cancel()
 		return nil, err
 	}
 
-	if config.ReloadInterval > 0 {
+	watcher, err := reloader.newWatcher()
+	if err != nil {
+		reloader.logError("watch tls certificate files failed", "error", err)
+	} else {
+		reloader.watcher = watcher
+	}
+
+	if reloader.watcher != nil || config.ReloadInterval > 0 {
 		reloader.wg.Go(func() {
-			reloader.reloadLoop(reloaderCtx)
+			reloader.backgroundLoop(reloaderCtx)
 		})
 	}
 
@@ -108,6 +121,9 @@ func (r *Reloader) Close() {
 	}
 	r.closeOnce.Do(func() {
 		r.cancel()
+		if r.watcher != nil {
+			_ = r.watcher.Close()
+		}
 		r.wg.Wait()
 	})
 }
@@ -141,23 +157,97 @@ func (r *Reloader) Version() string {
 	return current.version
 }
 
-func (r *Reloader) reloadLoop(ctx context.Context) {
-	timer := time.NewTimer(r.reloadInterval)
-	defer timer.Stop()
+func (r *Reloader) newWatcher() (*fsnotify.Watcher, error) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+
+	dirs := map[string]struct{}{
+		filepath.Dir(r.certFile): {},
+		filepath.Dir(r.keyFile):  {},
+	}
+	for dir := range dirs {
+		if err := watcher.Add(dir); err != nil {
+			_ = watcher.Close()
+			return nil, fmt.Errorf("watch tls directory %q: %w", dir, err)
+		}
+	}
+	return watcher, nil
+}
+
+func (r *Reloader) backgroundLoop(ctx context.Context) {
+	var timer *time.Timer
+	var timerCh <-chan time.Time
+	if r.reloadInterval > 0 {
+		timer = time.NewTimer(r.reloadInterval)
+		timerCh = timer.C
+		defer timer.Stop()
+	}
+
+	var events <-chan fsnotify.Event
+	var watcherErrors <-chan error
+	if r.watcher != nil {
+		events = r.watcher.Events
+		watcherErrors = r.watcher.Errors
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-timer.C:
-			if err := r.reload(ctx, false); err != nil {
-				r.logError("reload tls certificate failed", "error", err)
-				timer.Reset(r.retryInterval)
+		case event, ok := <-events:
+			if !ok {
+				events = nil
 				continue
 			}
-			timer.Reset(r.reloadInterval)
+			if !r.shouldReloadForEvent(event) {
+				continue
+			}
+			if err := r.reload(ctx, false); err != nil {
+				r.logError("reload tls certificate from file event failed", "event", event.String(), "error", err)
+			}
+		case err, ok := <-watcherErrors:
+			if !ok {
+				watcherErrors = nil
+				continue
+			}
+			r.logError("watch tls certificate files failed", "error", err)
+		case <-timerCh:
+			if err := r.reload(ctx, false); err != nil {
+				r.logError("reload tls certificate failed", "error", err)
+				resetTimer(timer, r.retryInterval)
+				continue
+			}
+			resetTimer(timer, r.reloadInterval)
 		}
 	}
+}
+
+func (r *Reloader) shouldReloadForEvent(event fsnotify.Event) bool {
+	if !event.Has(fsnotify.Write) &&
+		!event.Has(fsnotify.Create) &&
+		!event.Has(fsnotify.Rename) &&
+		!event.Has(fsnotify.Remove) {
+		return false
+	}
+	return samePath(event.Name, r.certFile) || samePath(event.Name, r.keyFile)
+}
+
+func samePath(left, right string) bool {
+	leftAbs, leftErr := filepath.Abs(left)
+	rightAbs, rightErr := filepath.Abs(right)
+	if leftErr == nil && rightErr == nil {
+		return leftAbs == rightAbs
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func resetTimer(timer *time.Timer, duration time.Duration) {
+	if timer == nil {
+		return
+	}
+	timer.Reset(duration)
 }
 
 func (r *Reloader) reload(ctx context.Context, force bool) error {
@@ -234,7 +324,7 @@ func normalizeTLSFilePath(value string) (string, error) {
 	if strings.Contains(trimmed, "://") {
 		return "", errors.New("tls file path must not use a URI scheme")
 	}
-	return trimmed, nil
+	return filepath.Clean(trimmed), nil
 }
 
 func (r *Reloader) logInfo(msg string, args ...any) {

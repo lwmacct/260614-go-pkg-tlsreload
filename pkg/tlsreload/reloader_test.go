@@ -57,7 +57,38 @@ func TestNewRejectsNegativeReloadInterval(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestReloaderReloadsCertificate(t *testing.T) {
+func TestReloaderReloadsCertificateFromFileEvent(t *testing.T) {
+	dir := t.TempDir()
+	certFile := filepath.Join(dir, "fullchain.pem")
+	keyFile := filepath.Join(dir, "privkey.pem")
+
+	cert1, key1 := mustGenerateTLSPair(t, "one")
+	cert2, key2 := mustGenerateTLSPair(t, "two")
+	require.NoError(t, os.WriteFile(certFile, cert1, 0o600))
+	require.NoError(t, os.WriteFile(keyFile, key1, 0o600))
+
+	reloader, err := New(t.Context(), Config{
+		CertFile: certFile,
+		KeyFile:  keyFile,
+	})
+	require.NoError(t, err)
+	defer reloader.Close()
+
+	initial, err := reloader.GetCertificate(nil)
+	require.NoError(t, err)
+	require.Equal(t, initial.Certificate[0], mustParseKeyPair(t, cert1, key1).Certificate[0])
+
+	require.NoError(t, os.WriteFile(certFile, cert2, 0o600))
+	require.NoError(t, os.WriteFile(keyFile, key2, 0o600))
+
+	require.Eventually(t, func() bool {
+		current, err := reloader.GetCertificate(nil)
+		require.NoError(t, err)
+		return string(current.Certificate[0]) == string(mustParseKeyPair(t, cert2, key2).Certificate[0])
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestReloaderReloadsCertificateFromFallbackPoll(t *testing.T) {
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "fullchain.pem")
 	keyFile := filepath.Join(dir, "privkey.pem")
@@ -75,6 +106,8 @@ func TestReloaderReloadsCertificate(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer reloader.Close()
+	require.NoError(t, reloader.watcher.Close())
+	reloader.watcher = nil
 
 	initial, err := reloader.GetCertificate(nil)
 	require.NoError(t, err)
@@ -100,10 +133,8 @@ func TestReloaderKeepsPreviousCertificateOnInvalidReload(t *testing.T) {
 	require.NoError(t, os.WriteFile(keyFile, key1, 0o600))
 
 	reloader, err := New(t.Context(), Config{
-		CertFile:       certFile,
-		KeyFile:        keyFile,
-		ReloadInterval: 10 * time.Millisecond,
-		RetryInterval:  10 * time.Millisecond,
+		CertFile: certFile,
+		KeyFile:  keyFile,
 	})
 	require.NoError(t, err)
 	defer reloader.Close()
@@ -113,11 +144,14 @@ func TestReloaderKeepsPreviousCertificateOnInvalidReload(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(certFile, []byte("bad cert"), 0o600))
 	require.NoError(t, os.WriteFile(keyFile, []byte("bad key"), 0o600))
-	time.Sleep(50 * time.Millisecond)
 
-	current, err := reloader.GetCertificate(nil)
-	require.NoError(t, err)
-	require.Equal(t, previous.Certificate[0], current.Certificate[0])
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		current, err := reloader.GetCertificate(nil)
+		require.NoError(t, err)
+		require.Equal(t, previous.Certificate[0], current.Certificate[0])
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func TestReloaderKeepsPreviousCertificateDuringPartialUpdate(t *testing.T) {
