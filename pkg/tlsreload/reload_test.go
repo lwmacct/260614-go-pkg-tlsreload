@@ -160,6 +160,48 @@ func TestNewLoadsCertificateFromOnePassword(t *testing.T) {
 	require.Nil(t, manager.watcher)
 }
 
+func TestManagerKeepsPreviousCertificateOnOnePasswordAmbiguousReload(t *testing.T) {
+	cert, key := mustGenerateTLSPair(t, "op-stable")
+	ambiguousErr := errors.New("more than one item matched the secret reference query")
+	ambiguous := false
+	restore := stubOnePasswordResolverFunc(t, func(location string, options loaderOptions) (string, error) {
+		require.NotEmpty(t, options.onePasswordToken)
+		if ambiguous {
+			return "", ambiguousErr
+		}
+		switch location {
+		case "op://vault/item/fullchain":
+			return string(cert), nil
+		case "op://vault/item/privkey":
+			return string(key), nil
+		default:
+			return "", errors.New("secret not found")
+		}
+	})
+	defer restore()
+
+	manager, err := New(t.Context(), Config{
+		Enabled:  true,
+		CertFile: "op://vault/item/fullchain",
+		KeyFile:  "op://vault/item/privkey",
+	}, Options{
+		OnePasswordToken: "test-token",
+	})
+	require.NoError(t, err)
+	defer manager.Close()
+
+	previous, err := manager.GetCertificate(nil)
+	require.NoError(t, err)
+
+	ambiguous = true
+	require.ErrorIs(t, manager.Reload(t.Context()), ambiguousErr)
+
+	current, err := manager.GetCertificate(nil)
+	require.NoError(t, err)
+	require.Equal(t, previous.Certificate[0], current.Certificate[0])
+	require.Equal(t, tlsMaterialVersion(cert, key), manager.Version())
+}
+
 func TestNewRejectsNegativePollInterval(t *testing.T) {
 	_, err := New(t.Context(), Config{
 		Enabled:      true,
@@ -435,14 +477,22 @@ func (s *tlsMaterialServer) HTTPURL(path string) string {
 func stubOnePasswordResolver(t *testing.T, secrets map[string]string) func() {
 	t.Helper()
 
-	previous := resolveOnePasswordLocation
-	resolveOnePasswordLocation = func(_ context.Context, location string, options loaderOptions) (string, error) {
-		require.NotEmpty(t, options.onePasswordToken)
+	return stubOnePasswordResolverFunc(t, func(location string, options loaderOptions) (string, error) {
 		secret, ok := secrets[location]
 		if !ok {
 			return "", errors.New("secret not found")
 		}
 		return secret, nil
+	})
+}
+
+func stubOnePasswordResolverFunc(t *testing.T, resolver func(location string, options loaderOptions) (string, error)) func() {
+	t.Helper()
+
+	previous := resolveOnePasswordLocation
+	resolveOnePasswordLocation = func(_ context.Context, location string, options loaderOptions) (string, error) {
+		require.NotEmpty(t, options.onePasswordToken)
+		return resolver(location, options)
 	}
 	return func() {
 		resolveOnePasswordLocation = previous
