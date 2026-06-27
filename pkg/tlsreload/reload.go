@@ -5,15 +5,15 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
 
 var errMissingTLSFiles = errors.New("tls reload requires both cert file and key file")
+
+var errNoLocalWatchSources = errors.New("tls reload has no local file sources to watch")
 
 var newFSNotifyWatcher = fsnotify.NewWatcher
 
@@ -56,15 +56,22 @@ func (m *Manager) Version() string {
 }
 
 func (m *Manager) newWatcher() (*fsnotify.Watcher, error) {
+	dirs := make(map[string]struct{})
+	if certFile, ok := localFilePath(m.certFile); ok {
+		dirs[filepath.Dir(certFile)] = struct{}{}
+	}
+	if keyFile, ok := localFilePath(m.keyFile); ok {
+		dirs[filepath.Dir(keyFile)] = struct{}{}
+	}
+	if len(dirs) == 0 {
+		return nil, errNoLocalWatchSources
+	}
+
 	watcher, err := newFSNotifyWatcher()
 	if err != nil {
 		return nil, err
 	}
 
-	dirs := map[string]struct{}{
-		filepath.Dir(m.certFile): {},
-		filepath.Dir(m.keyFile):  {},
-	}
 	for dir := range dirs {
 		if err := watcher.Add(dir); err != nil {
 			_ = watcher.Close()
@@ -129,7 +136,9 @@ func (m *Manager) shouldReloadForEvent(event fsnotify.Event) bool {
 		!event.Has(fsnotify.Remove) {
 		return false
 	}
-	return samePath(event.Name, m.certFile) || samePath(event.Name, m.keyFile)
+	certFile, certLocal := localFilePath(m.certFile)
+	keyFile, keyLocal := localFilePath(m.keyFile)
+	return (certLocal && samePath(event.Name, certFile)) || (keyLocal && samePath(event.Name, keyFile))
 }
 
 func samePath(left, right string) bool {
@@ -188,7 +197,7 @@ func (m *Manager) loadMaterial(ctx context.Context) (material, error) {
 		return material{}, err
 	}
 
-	certPEM, keyPEM, err := readTLSFiles(m.certFile, m.keyFile)
+	certPEM, keyPEM, err := readTLSLocations(ctx, m.certFile, m.keyFile, m.loaderOptions)
 	if err != nil {
 		return material{}, err
 	}
@@ -200,36 +209,11 @@ func (m *Manager) loadMaterial(ctx context.Context) (material, error) {
 	}, nil
 }
 
-func readTLSFiles(certFile, keyFile string) ([]byte, []byte, error) {
-	// #nosec G304 -- certificate paths are provided by the embedding application configuration.
-	certPEM, err := os.ReadFile(certFile)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read tls cert file: %w", err)
-	}
-	// #nosec G304 -- key paths are provided by the embedding application configuration.
-	keyPEM, err := os.ReadFile(keyFile)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read tls key file: %w", err)
-	}
-	return certPEM, keyPEM, nil
-}
-
-func normalizeTLSFilePath(value string) (string, error) {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return "", nil
-	}
-	if strings.Contains(trimmed, "://") {
-		return "", errors.New("tls file path must not use a URI scheme")
-	}
-	return filepath.Clean(trimmed), nil
-}
-
 func (m *Manager) logInfo(msg string, args ...any) {
 	if m.logger == nil {
 		return
 	}
-	args = append([]any{"cert_file", m.certFile, "key_file", m.keyFile}, args...)
+	args = append([]any{"cert_file", redactLocation(m.certFile), "key_file", redactLocation(m.keyFile)}, args...)
 	m.logger.Info(msg, args...)
 }
 
@@ -237,6 +221,6 @@ func (m *Manager) logError(msg string, args ...any) {
 	if m.logger == nil {
 		return
 	}
-	args = append([]any{"cert_file", m.certFile, "key_file", m.keyFile}, args...)
+	args = append([]any{"cert_file", redactLocation(m.certFile), "key_file", redactLocation(m.keyFile)}, args...)
 	m.logger.Error(msg, args...)
 }

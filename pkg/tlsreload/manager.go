@@ -3,7 +3,9 @@ package tlsreload
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"log/slog"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,9 +15,13 @@ import (
 
 // Options controls TLS runtime behavior that is not normally sourced from config files.
 type Options struct {
-	MinVersion    uint16
-	RetryInterval time.Duration
-	Logger        *slog.Logger
+	MinVersion          uint16
+	RetryInterval       time.Duration
+	Logger              *slog.Logger
+	AllowInsecureHTTP   bool
+	HTTPClient          *http.Client
+	OnePasswordToken    string
+	OnePasswordTokenEnv string
 }
 
 // Manager owns an optional hot-reloadable TLS certificate source.
@@ -28,6 +34,7 @@ type Manager struct {
 	minVersion    uint16
 	logger        *slog.Logger
 	watcher       *fsnotify.Watcher
+	loaderOptions loaderOptions
 
 	reloadMu sync.Mutex
 	current  atomic.Pointer[snapshot]
@@ -52,11 +59,11 @@ func New(ctx context.Context, config Config, options Options) (*Manager, error) 
 		options.RetryInterval = 2 * time.Second
 	}
 
-	certFile, err := normalizeTLSFilePath(config.CertFile)
+	certFile, err := normalizeTLSLocation(config.CertFile)
 	if err != nil {
 		return nil, err
 	}
-	keyFile, err := normalizeTLSFilePath(config.KeyFile)
+	keyFile, err := normalizeTLSLocation(config.KeyFile)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +80,13 @@ func New(ctx context.Context, config Config, options Options) (*Manager, error) 
 		retryInterval: options.RetryInterval,
 		minVersion:    options.MinVersion,
 		logger:        options.Logger,
-		cancel:        cancel,
+		loaderOptions: loaderOptions{
+			allowInsecureHTTP:   options.AllowInsecureHTTP,
+			httpClient:          options.HTTPClient,
+			onePasswordToken:    options.OnePasswordToken,
+			onePasswordTokenEnv: options.OnePasswordTokenEnv,
+		},
+		cancel: cancel,
 	}
 
 	if reloadErr := manager.reload(managerCtx, true); reloadErr != nil {
@@ -82,9 +95,12 @@ func New(ctx context.Context, config Config, options Options) (*Manager, error) 
 	}
 
 	watcher, err := manager.newWatcher()
-	if err != nil {
+	switch {
+	case errors.Is(err, errNoLocalWatchSources):
+		// Remote sources do not have file system events; polling and manual reload still work.
+	case err != nil:
 		manager.logError("watch tls certificate files failed", "error", err)
-	} else {
+	default:
 		manager.watcher = watcher
 	}
 

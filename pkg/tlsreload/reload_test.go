@@ -1,6 +1,7 @@
 package tlsreload
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -9,6 +10,9 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -72,10 +76,88 @@ func TestMustNewReturnsEnabledManager(t *testing.T) {
 func TestNewRejectsURIPaths(t *testing.T) {
 	_, err := New(t.Context(), Config{
 		Enabled:  true,
-		CertFile: "file:///cert.pem",
+		CertFile: "ftp://example.com/cert.pem",
 		KeyFile:  "key.pem",
 	}, Options{})
 	require.Error(t, err)
+}
+
+func TestNewLoadsCertificateFromHTTPS(t *testing.T) {
+	cert, key := mustGenerateTLSPair(t, "https")
+	server := newTLSMaterialServer(t, cert, key, "user", "pass")
+	defer server.Close()
+
+	manager, err := New(t.Context(), Config{
+		Enabled:  true,
+		CertFile: server.URLWithUser("/fullchain.pem", "user", "pass"),
+		KeyFile:  server.URLWithUser("/privkey.pem", "user", "pass"),
+	}, Options{
+		HTTPClient: server.Client(),
+	})
+	require.NoError(t, err)
+	defer manager.Close()
+
+	current, err := manager.GetCertificate(nil)
+	require.NoError(t, err)
+	require.Equal(t, mustParseKeyPair(t, cert, key).Certificate[0], current.Certificate[0])
+	require.Nil(t, manager.watcher)
+}
+
+func TestNewRejectsHTTPByDefault(t *testing.T) {
+	cert, key := mustGenerateTLSPair(t, "http")
+	server := newTLSMaterialServer(t, cert, key, "", "")
+	defer server.Close()
+
+	_, err := New(t.Context(), Config{
+		Enabled:  true,
+		CertFile: server.HTTPURL("/fullchain.pem"),
+		KeyFile:  server.HTTPURL("/privkey.pem"),
+	}, Options{})
+	require.Error(t, err)
+}
+
+func TestNewLoadsCertificateFromHTTPWhenAllowed(t *testing.T) {
+	cert, key := mustGenerateTLSPair(t, "http-allowed")
+	server := newTLSMaterialServer(t, cert, key, "", "")
+	defer server.Close()
+
+	manager, err := New(t.Context(), Config{
+		Enabled:  true,
+		CertFile: server.HTTPURL("/fullchain.pem"),
+		KeyFile:  server.HTTPURL("/privkey.pem"),
+	}, Options{
+		AllowInsecureHTTP: true,
+	})
+	require.NoError(t, err)
+	defer manager.Close()
+
+	current, err := manager.GetCertificate(nil)
+	require.NoError(t, err)
+	require.Equal(t, mustParseKeyPair(t, cert, key).Certificate[0], current.Certificate[0])
+}
+
+func TestNewLoadsCertificateFromOnePassword(t *testing.T) {
+	cert, key := mustGenerateTLSPair(t, "op")
+	restore := stubOnePasswordResolver(t, map[string]string{
+		"op://vault/item/fullchain": string(cert),
+		"op://vault/item/privkey":   string(key),
+	})
+	defer restore()
+
+	manager, err := New(t.Context(), Config{
+		Enabled:  true,
+		CertFile: "op://vault/item/fullchain",
+		KeyFile:  "op://vault/item/privkey",
+	}, Options{
+		OnePasswordToken: "test-token",
+	})
+	require.NoError(t, err)
+	defer manager.Close()
+
+	current, err := manager.GetCertificate(nil)
+	require.NoError(t, err)
+	require.Equal(t, mustParseKeyPair(t, cert, key).Certificate[0], current.Certificate[0])
+	require.Nil(t, manager.watcher)
 }
 
 func TestNewRejectsNegativePollInterval(t *testing.T) {
@@ -287,6 +369,84 @@ func disableFSWatcher(t *testing.T) {
 	t.Cleanup(func() {
 		newFSNotifyWatcher = previous
 	})
+}
+
+type tlsMaterialServer struct {
+	https *httptest.Server
+	http  *httptest.Server
+}
+
+func newTLSMaterialServer(t *testing.T, certPEM, keyPEM []byte, username, password string) *tlsMaterialServer {
+	t.Helper()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if username != "" || password != "" {
+			gotUsername, gotPassword, ok := r.BasicAuth()
+			if !ok || gotUsername != username || gotPassword != password {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+		}
+
+		switch r.URL.Path {
+		case "/fullchain.pem":
+			_, _ = w.Write(certPEM)
+		case "/privkey.pem":
+			_, _ = w.Write(keyPEM)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+
+	return &tlsMaterialServer{
+		https: httptest.NewTLSServer(handler),
+		http:  httptest.NewServer(handler),
+	}
+}
+
+func (s *tlsMaterialServer) Close() {
+	s.https.Close()
+	s.http.Close()
+}
+
+func (s *tlsMaterialServer) Client() *http.Client {
+	return s.https.Client()
+}
+
+func (s *tlsMaterialServer) URLWithUser(path, username, password string) string {
+	parsed, err := url.Parse(s.https.URL)
+	if err != nil {
+		panic(err)
+	}
+	parsed.Path = path
+	parsed.User = url.UserPassword(username, password)
+	return parsed.String()
+}
+
+func (s *tlsMaterialServer) HTTPURL(path string) string {
+	parsed, err := url.Parse(s.http.URL)
+	if err != nil {
+		panic(err)
+	}
+	parsed.Path = path
+	return parsed.String()
+}
+
+func stubOnePasswordResolver(t *testing.T, secrets map[string]string) func() {
+	t.Helper()
+
+	previous := resolveOnePasswordLocation
+	resolveOnePasswordLocation = func(_ context.Context, location string, options loaderOptions) (string, error) {
+		require.NotEmpty(t, options.onePasswordToken)
+		secret, ok := secrets[location]
+		if !ok {
+			return "", errors.New("secret not found")
+		}
+		return secret, nil
+	}
+	return func() {
+		resolveOnePasswordLocation = previous
+	}
 }
 
 func mustGenerateTLSPair(t *testing.T, commonName string) ([]byte, []byte) {
