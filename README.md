@@ -31,7 +31,6 @@ package main
 import (
 	"context"
 	"net/http"
-	"time"
 
 	"github.com/lwmacct/260614-go-pkg-tlsreload/pkg/tlsreload"
 )
@@ -43,7 +42,6 @@ func main() {
 		Enabled:      true,
 		CertFile:     "/etc/ssl/fullchain.pem",
 		KeyFile:      "/etc/ssl/privkey.pem",
-		PollInterval: 3 * time.Second,
 	}, tlsreload.Options{})
 	if err != nil {
 		panic(err)
@@ -65,7 +63,9 @@ func main() {
 本地文件来源会使用文件系统事件触发重载。`Config.PollInterval` 作为兜底轮询间隔，用于覆盖事件丢失、watcher 受限或远端来源变化的场景。
 
 - `PollInterval > 0`：按该间隔启用兜底轮询。
-- `PollInterval == 0`：禁用兜底轮询；本地文件系统事件仍会触发重载。
+- 未配置 `PollInterval` 时使用默认 `5 * time.Minute`。
+- `Options.PollJitterRatio`：兜底轮询成功后按比例加入向下随机抖动，默认 `0.10`，
+  即实际间隔在 `PollInterval * 90%` 到 `PollInterval` 之间。
 - `RetryInterval`：兜底轮询重载失败后，下次兜底轮询前的等待时间。
 
 首次加载必须成功。启动后如果重载失败，配置了 logger 时会记录错误，
@@ -96,12 +96,13 @@ type Config struct {
 	Enabled      bool          `json:"enabled"   desc:"是否启用 HTTPS TLS"`
 	CertFile     string        `json:"cert-file" desc:"TLS 证书文件路径或 URI"`
 	KeyFile      string        `json:"key-file"  desc:"TLS 私钥文件路径或 URI"`
-	PollInterval time.Duration `json:"poll-interval" desc:"TLS 证书文件重载兜底轮询间隔，0 表示禁用兜底轮询"`
+	PollInterval time.Duration `json:"poll-interval" desc:"TLS 证书文件重载兜底轮询间隔，未配置时使用默认间隔"`
 }
 
 type Options struct {
 	MinVersion          uint16
 	RetryInterval       time.Duration
+	PollJitterRatio     float64
 	Logger              *slog.Logger
 	AllowInsecureHTTP   bool
 	HTTPClient          *http.Client
@@ -110,6 +111,7 @@ type Options struct {
 }
 ```
 
+`Config.PollInterval` 默认是 `5 * time.Minute`。`Options.PollJitterRatio` 默认是 `0.10`。
 `Options.MinVersion` 默认是 `tls.VersionTLS12`。`Options.RetryInterval` 默认是 `2 * time.Second`。
 
 主要方法：

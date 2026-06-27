@@ -13,10 +13,17 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+const (
+	defaultPollInterval  = 5 * time.Minute
+	defaultRetryInterval = 2 * time.Second
+	defaultPollJitter    = 0.10
+)
+
 // Options controls TLS runtime behavior that is not normally sourced from config files.
 type Options struct {
 	MinVersion          uint16
 	RetryInterval       time.Duration
+	PollJitterRatio     float64
 	Logger              *slog.Logger
 	AllowInsecureHTTP   bool
 	HTTPClient          *http.Client
@@ -26,15 +33,16 @@ type Options struct {
 
 // Manager owns an optional hot-reloadable TLS certificate source.
 type Manager struct {
-	enabled       bool
-	certFile      string
-	keyFile       string
-	pollInterval  time.Duration
-	retryInterval time.Duration
-	minVersion    uint16
-	logger        *slog.Logger
-	watcher       *fsnotify.Watcher
-	loaderOptions loaderOptions
+	enabled         bool
+	certFile        string
+	keyFile         string
+	pollInterval    time.Duration
+	pollJitterRatio float64
+	retryInterval   time.Duration
+	minVersion      uint16
+	logger          *slog.Logger
+	watcher         *fsnotify.Watcher
+	loaderOptions   loaderOptions
 
 	reloadMu sync.Mutex
 	current  atomic.Pointer[snapshot]
@@ -56,7 +64,18 @@ func New(ctx context.Context, config Config, options Options) (*Manager, error) 
 		options.MinVersion = tls.VersionTLS12
 	}
 	if options.RetryInterval <= 0 {
-		options.RetryInterval = 2 * time.Second
+		options.RetryInterval = defaultRetryInterval
+	}
+	pollInterval := config.PollInterval
+	if pollInterval == 0 {
+		pollInterval = defaultPollInterval
+	}
+	pollJitterRatio := options.PollJitterRatio
+	if pollJitterRatio == 0 {
+		pollJitterRatio = defaultPollJitter
+	}
+	if pollJitterRatio < 0 || pollJitterRatio >= 1 {
+		return nil, errors.New("tls poll jitter ratio must be >= 0 and < 1")
 	}
 
 	certFile, err := normalizeTLSLocation(config.CertFile)
@@ -73,13 +92,14 @@ func New(ctx context.Context, config Config, options Options) (*Manager, error) 
 
 	managerCtx, cancel := context.WithCancel(ctx)
 	manager := &Manager{
-		enabled:       true,
-		certFile:      certFile,
-		keyFile:       keyFile,
-		pollInterval:  config.PollInterval,
-		retryInterval: options.RetryInterval,
-		minVersion:    options.MinVersion,
-		logger:        options.Logger,
+		enabled:         true,
+		certFile:        certFile,
+		keyFile:         keyFile,
+		pollInterval:    pollInterval,
+		pollJitterRatio: pollJitterRatio,
+		retryInterval:   options.RetryInterval,
+		minVersion:      options.MinVersion,
+		logger:          options.Logger,
 		loaderOptions: loaderOptions{
 			allowInsecureHTTP:   options.AllowInsecureHTTP,
 			httpClient:          options.HTTPClient,

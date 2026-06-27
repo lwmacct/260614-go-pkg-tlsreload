@@ -10,7 +10,7 @@ type Config struct {
 	Enabled      bool          `json:"enabled"   desc:"是否启用 HTTPS TLS"`
 	CertFile     string        `json:"cert-file" desc:"TLS 证书文件路径或 URI"`
 	KeyFile      string        `json:"key-file"  desc:"TLS 私钥文件路径或 URI"`
-	PollInterval time.Duration `json:"poll-interval" desc:"TLS 证书文件重载兜底轮询间隔，0 表示禁用兜底轮询"`
+	PollInterval time.Duration `json:"poll-interval" desc:"TLS 证书文件重载兜底轮询间隔，未配置时使用默认间隔"`
 }
 
 // Validate checks the config-level invariants before TLS runtime setup.

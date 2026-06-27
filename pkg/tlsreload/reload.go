@@ -2,9 +2,11 @@ package tlsreload
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"math/big"
 	"path/filepath"
 	"time"
 
@@ -85,7 +87,7 @@ func (m *Manager) backgroundLoop(ctx context.Context) {
 	var timer *time.Timer
 	var timerCh <-chan time.Time
 	if m.pollInterval > 0 {
-		timer = time.NewTimer(m.pollInterval)
+		timer = time.NewTimer(m.jitteredPollInterval())
 		timerCh = timer.C
 		defer timer.Stop()
 	}
@@ -124,7 +126,7 @@ func (m *Manager) backgroundLoop(ctx context.Context) {
 				resetTimer(timer, m.retryInterval)
 				continue
 			}
-			resetTimer(timer, m.pollInterval)
+			resetTimer(timer, m.jitteredPollInterval())
 		}
 	}
 }
@@ -155,6 +157,18 @@ func resetTimer(timer *time.Timer, duration time.Duration) {
 		return
 	}
 	timer.Reset(duration)
+}
+
+func (m *Manager) jitteredPollInterval() time.Duration {
+	maxJitter := time.Duration(float64(m.pollInterval) * m.pollJitterRatio)
+	if maxJitter <= 0 {
+		return m.pollInterval
+	}
+	jitter, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(maxJitter)+1))
+	if err != nil {
+		return m.pollInterval
+	}
+	return m.pollInterval - time.Duration(jitter.Int64())
 }
 
 func (m *Manager) reload(ctx context.Context, force bool) error {

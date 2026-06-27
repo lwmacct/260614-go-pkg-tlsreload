@@ -18,7 +18,7 @@ func TestConfigValidate(t *testing.T) {
 	}{
 		{name: "disabled"},
 		{
-			name: "enabled reload without fallback poll",
+			name: "enabled reload with default fallback poll",
 			config: Config{
 				Enabled:  true,
 				CertFile: "cert.pem",
@@ -102,7 +102,7 @@ func TestMustNewReturnsManager(t *testing.T) {
 	require.NotNil(t, manager.TLSConfig())
 }
 
-func TestNewUsesFileWatcherWithoutFallbackPoll(t *testing.T) {
+func TestNewUsesDefaultFallbackPoll(t *testing.T) {
 	certFile, keyFile := writeManagerTLSFiles(t)
 
 	manager, err := New(t.Context(), Config{
@@ -118,6 +118,8 @@ func TestNewUsesFileWatcherWithoutFallbackPoll(t *testing.T) {
 	require.True(t, manager.Enabled())
 	require.NotNil(t, manager.TLSConfig())
 	require.Equal(t, uint16(tls.VersionTLS13), manager.TLSConfig().MinVersion)
+	require.Equal(t, defaultPollInterval, manager.pollInterval)
+	require.InDelta(t, defaultPollJitter, manager.pollJitterRatio, 0)
 	_, err = manager.TLSConfig().GetCertificate(nil)
 	require.NoError(t, err)
 }
@@ -138,6 +140,61 @@ func TestNewUsesFallbackPoll(t *testing.T) {
 	require.NotNil(t, manager.TLSConfig())
 	_, err = manager.TLSConfig().GetCertificate(nil)
 	require.NoError(t, err)
+}
+
+func TestNewUsesConfiguredPollJitter(t *testing.T) {
+	certFile, keyFile := writeManagerTLSFiles(t)
+
+	manager, err := New(t.Context(), Config{
+		Enabled:      true,
+		CertFile:     certFile,
+		KeyFile:      keyFile,
+		PollInterval: time.Second,
+	}, Options{
+		PollJitterRatio: 0.25,
+	})
+
+	require.NoError(t, err)
+	t.Cleanup(manager.Close)
+	require.InDelta(t, 0.25, manager.pollJitterRatio, 0)
+}
+
+func TestNewRejectsInvalidPollJitter(t *testing.T) {
+	certFile, keyFile := writeManagerTLSFiles(t)
+
+	tests := []struct {
+		name  string
+		value float64
+	}{
+		{name: "negative", value: -0.1},
+		{name: "one", value: 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := New(t.Context(), Config{
+				Enabled:  true,
+				CertFile: certFile,
+				KeyFile:  keyFile,
+			}, Options{
+				PollJitterRatio: test.value,
+			})
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestJitteredPollInterval(t *testing.T) {
+	manager := &Manager{
+		pollInterval:    5 * time.Minute,
+		pollJitterRatio: 0.10,
+	}
+
+	for range 100 {
+		interval := manager.jitteredPollInterval()
+		require.GreaterOrEqual(t, interval, 270*time.Second)
+		require.LessOrEqual(t, interval, 5*time.Minute)
+	}
 }
 
 func writeManagerTLSFiles(t *testing.T) (string, string) {
