@@ -35,7 +35,7 @@ func ExampleReloader() {
 		return
 	}
 
-	reloader, err := New(ctx, Config{
+	reloader, err := NewReloader(ctx, ReloaderConfig{
 		CertFile:       certFile,
 		KeyFile:        keyFile,
 		ReloadInterval: 3 * time.Second,

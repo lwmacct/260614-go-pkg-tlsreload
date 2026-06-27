@@ -16,8 +16,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// Config controls file-backed TLS certificate loading and reload behavior.
-type Config struct {
+// ReloaderConfig controls file-backed TLS certificate loading and reload behavior.
+type ReloaderConfig struct {
 	CertFile string
 	KeyFile  string
 	// ReloadInterval is a fallback poll interval; file system events are always used when available.
@@ -50,8 +50,8 @@ type snapshot struct {
 	version     string
 }
 
-// New loads the initial certificate, watches certificate files for changes, and uses ReloadInterval as a fallback poll interval when greater than zero.
-func New(ctx context.Context, config Config) (*Reloader, error) {
+// NewReloader loads the initial certificate, watches certificate files for changes, and uses ReloadInterval as a fallback poll interval when greater than zero.
+func NewReloader(ctx context.Context, config ReloaderConfig) (*Reloader, error) {
 	certFile, err := normalizeTLSFilePath(config.CertFile)
 	if err != nil {
 		return nil, fmt.Errorf("cert file: %w", err)
@@ -106,9 +106,9 @@ func New(ctx context.Context, config Config) (*Reloader, error) {
 	return reloader, nil
 }
 
-// MustNew is like New but panics if the Reloader cannot be created.
-func MustNew(ctx context.Context, config Config) *Reloader {
-	reloader, err := New(ctx, config)
+// MustNewReloader is like NewReloader but panics if the Reloader cannot be created.
+func MustNewReloader(ctx context.Context, config ReloaderConfig) *Reloader {
+	reloader, err := NewReloader(ctx, config)
 	if err != nil {
 		panic(err)
 	}

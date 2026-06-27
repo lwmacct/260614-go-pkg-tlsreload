@@ -17,13 +17,13 @@ import (
 )
 
 func TestNewRequiresPaths(t *testing.T) {
-	_, err := New(t.Context(), Config{})
+	_, err := NewReloader(t.Context(), ReloaderConfig{})
 	require.Error(t, err)
 }
 
 func TestMustNewPanicsOnError(t *testing.T) {
 	require.Panics(t, func() {
-		MustNew(t.Context(), Config{})
+		MustNewReloader(t.Context(), ReloaderConfig{})
 	})
 }
 
@@ -35,7 +35,7 @@ func TestNewNormalizesPaths(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key, 0o600))
 
-	reloader, err := New(t.Context(), Config{
+	reloader, err := NewReloader(t.Context(), ReloaderConfig{
 		CertFile: " " + certFile + " ",
 		KeyFile:  " " + keyFile + " ",
 	})
@@ -54,7 +54,7 @@ func TestMustNewReturnsReloader(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key, 0o600))
 
-	reloader := MustNew(t.Context(), Config{
+	reloader := MustNewReloader(t.Context(), ReloaderConfig{
 		CertFile: certFile,
 		KeyFile:  keyFile,
 	})
@@ -66,7 +66,7 @@ func TestMustNewReturnsReloader(t *testing.T) {
 }
 
 func TestNewRejectsURIPaths(t *testing.T) {
-	_, err := New(t.Context(), Config{
+	_, err := NewReloader(t.Context(), ReloaderConfig{
 		CertFile: "file:///cert.pem",
 		KeyFile:  "key.pem",
 	})
@@ -74,7 +74,7 @@ func TestNewRejectsURIPaths(t *testing.T) {
 }
 
 func TestNewRejectsNegativeReloadInterval(t *testing.T) {
-	_, err := New(t.Context(), Config{
+	_, err := NewReloader(t.Context(), ReloaderConfig{
 		CertFile:       "cert.pem",
 		KeyFile:        "key.pem",
 		ReloadInterval: -time.Second,
@@ -92,7 +92,7 @@ func TestReloaderReloadsCertificateFromFileEvent(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert1, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key1, 0o600))
 
-	reloader, err := New(t.Context(), Config{
+	reloader, err := NewReloader(t.Context(), ReloaderConfig{
 		CertFile: certFile,
 		KeyFile:  keyFile,
 	})
@@ -123,7 +123,7 @@ func TestReloaderReloadsCertificateFromFallbackPoll(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert1, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key1, 0o600))
 
-	reloader, err := New(t.Context(), Config{
+	reloader, err := NewReloader(t.Context(), ReloaderConfig{
 		CertFile:       certFile,
 		KeyFile:        keyFile,
 		ReloadInterval: 10 * time.Millisecond,
@@ -157,7 +157,7 @@ func TestReloaderKeepsPreviousCertificateOnInvalidReload(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert1, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key1, 0o600))
 
-	reloader, err := New(t.Context(), Config{
+	reloader, err := NewReloader(t.Context(), ReloaderConfig{
 		CertFile: certFile,
 		KeyFile:  keyFile,
 	})
@@ -189,7 +189,7 @@ func TestReloaderKeepsPreviousCertificateDuringPartialUpdate(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert1, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key1, 0o600))
 
-	reloader, err := New(t.Context(), Config{
+	reloader, err := NewReloader(t.Context(), ReloaderConfig{
 		CertFile:       certFile,
 		KeyFile:        keyFile,
 		ReloadInterval: 10 * time.Millisecond,
@@ -225,7 +225,7 @@ func TestManualReload(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert1, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key1, 0o600))
 
-	reloader, err := New(t.Context(), Config{
+	reloader, err := NewReloader(t.Context(), ReloaderConfig{
 		CertFile: certFile,
 		KeyFile:  keyFile,
 	})
@@ -249,7 +249,7 @@ func TestTLSConfigUsesConfiguredMinVersion(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key, 0o600))
 
-	reloader, err := New(t.Context(), Config{
+	reloader, err := NewReloader(t.Context(), ReloaderConfig{
 		CertFile:   certFile,
 		KeyFile:    keyFile,
 		MinVersion: tls.VersionTLS13,
