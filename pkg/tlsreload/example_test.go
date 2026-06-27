@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func ExampleReloader() {
+func ExampleManager() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -35,18 +35,20 @@ func ExampleReloader() {
 		return
 	}
 
-	reloader, err := NewReloader(ctx, ReloaderConfig{
-		CertFile:       certFile,
-		KeyFile:        keyFile,
-		ReloadInterval: 3 * time.Second,
-		MinVersion:     tls.VersionTLS12,
+	manager, err := New(ctx, Config{
+		Enabled:      true,
+		CertFile:     certFile,
+		KeyFile:      keyFile,
+		PollInterval: 3 * time.Second,
+	}, Options{
+		MinVersion: tls.VersionTLS12,
 	})
 	if err != nil {
 		return
 	}
-	defer reloader.Close()
+	defer manager.Close()
 
-	cfg := reloader.TLSConfig()
+	cfg := manager.TLSConfig()
 	fmt.Println(cfg.GetCertificate != nil && cfg.MinVersion == tls.VersionTLS12)
 
 	// Output:

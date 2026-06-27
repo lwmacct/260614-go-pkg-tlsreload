@@ -7,23 +7,25 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewRequiresPaths(t *testing.T) {
-	_, err := NewReloader(t.Context(), ReloaderConfig{})
+	_, err := New(t.Context(), Config{Enabled: true}, Options{})
 	require.Error(t, err)
 }
 
-func TestMustNewPanicsOnError(t *testing.T) {
+func TestMustNewPanicsWhenTLSFilesAreMissing(t *testing.T) {
 	require.Panics(t, func() {
-		MustNewReloader(t.Context(), ReloaderConfig{})
+		MustNew(t.Context(), Config{Enabled: true}, Options{})
 	})
 }
 
@@ -35,18 +37,19 @@ func TestNewNormalizesPaths(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key, 0o600))
 
-	reloader, err := NewReloader(t.Context(), ReloaderConfig{
+	manager, err := New(t.Context(), Config{
+		Enabled:  true,
 		CertFile: " " + certFile + " ",
 		KeyFile:  " " + keyFile + " ",
-	})
+	}, Options{})
 	require.NoError(t, err)
-	defer reloader.Close()
+	defer manager.Close()
 
-	require.Equal(t, certFile, reloader.certFile)
-	require.Equal(t, keyFile, reloader.keyFile)
+	require.Equal(t, certFile, manager.certFile)
+	require.Equal(t, keyFile, manager.keyFile)
 }
 
-func TestMustNewReturnsReloader(t *testing.T) {
+func TestMustNewReturnsEnabledManager(t *testing.T) {
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "fullchain.pem")
 	keyFile := filepath.Join(dir, "privkey.pem")
@@ -54,35 +57,38 @@ func TestMustNewReturnsReloader(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key, 0o600))
 
-	reloader := MustNewReloader(t.Context(), ReloaderConfig{
+	manager := MustNew(t.Context(), Config{
+		Enabled:  true,
 		CertFile: certFile,
 		KeyFile:  keyFile,
-	})
-	defer reloader.Close()
+	}, Options{})
+	defer manager.Close()
 
-	current, err := reloader.GetCertificate(nil)
+	current, err := manager.GetCertificate(nil)
 	require.NoError(t, err)
 	require.NotNil(t, current)
 }
 
 func TestNewRejectsURIPaths(t *testing.T) {
-	_, err := NewReloader(t.Context(), ReloaderConfig{
+	_, err := New(t.Context(), Config{
+		Enabled:  true,
 		CertFile: "file:///cert.pem",
 		KeyFile:  "key.pem",
-	})
+	}, Options{})
 	require.Error(t, err)
 }
 
-func TestNewRejectsNegativeReloadInterval(t *testing.T) {
-	_, err := NewReloader(t.Context(), ReloaderConfig{
-		CertFile:       "cert.pem",
-		KeyFile:        "key.pem",
-		ReloadInterval: -time.Second,
-	})
+func TestNewRejectsNegativePollInterval(t *testing.T) {
+	_, err := New(t.Context(), Config{
+		Enabled:      true,
+		CertFile:     "cert.pem",
+		KeyFile:      "key.pem",
+		PollInterval: -time.Second,
+	}, Options{})
 	require.Error(t, err)
 }
 
-func TestReloaderReloadsCertificateFromFileEvent(t *testing.T) {
+func TestManagerReloadsCertificateFromFileEvent(t *testing.T) {
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "fullchain.pem")
 	keyFile := filepath.Join(dir, "privkey.pem")
@@ -92,14 +98,15 @@ func TestReloaderReloadsCertificateFromFileEvent(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert1, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key1, 0o600))
 
-	reloader, err := NewReloader(t.Context(), ReloaderConfig{
+	manager, err := New(t.Context(), Config{
+		Enabled:  true,
 		CertFile: certFile,
 		KeyFile:  keyFile,
-	})
+	}, Options{})
 	require.NoError(t, err)
-	defer reloader.Close()
+	defer manager.Close()
 
-	initial, err := reloader.GetCertificate(nil)
+	initial, err := manager.GetCertificate(nil)
 	require.NoError(t, err)
 	require.Equal(t, initial.Certificate[0], mustParseKeyPair(t, cert1, key1).Certificate[0])
 
@@ -107,13 +114,15 @@ func TestReloaderReloadsCertificateFromFileEvent(t *testing.T) {
 	require.NoError(t, os.WriteFile(keyFile, key2, 0o600))
 
 	require.Eventually(t, func() bool {
-		current, err := reloader.GetCertificate(nil)
+		current, err := manager.GetCertificate(nil)
 		require.NoError(t, err)
 		return string(current.Certificate[0]) == string(mustParseKeyPair(t, cert2, key2).Certificate[0])
 	}, 2*time.Second, 10*time.Millisecond)
 }
 
-func TestReloaderReloadsCertificateFromFallbackPoll(t *testing.T) {
+func TestManagerReloadsCertificateFromFallbackPoll(t *testing.T) {
+	disableFSWatcher(t)
+
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "fullchain.pem")
 	keyFile := filepath.Join(dir, "privkey.pem")
@@ -123,18 +132,18 @@ func TestReloaderReloadsCertificateFromFallbackPoll(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert1, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key1, 0o600))
 
-	reloader, err := NewReloader(t.Context(), ReloaderConfig{
-		CertFile:       certFile,
-		KeyFile:        keyFile,
-		ReloadInterval: 10 * time.Millisecond,
-		RetryInterval:  10 * time.Millisecond,
+	manager, err := New(t.Context(), Config{
+		Enabled:      true,
+		CertFile:     certFile,
+		KeyFile:      keyFile,
+		PollInterval: 10 * time.Millisecond,
+	}, Options{
+		RetryInterval: 10 * time.Millisecond,
 	})
 	require.NoError(t, err)
-	defer reloader.Close()
-	require.NoError(t, reloader.watcher.Close())
-	reloader.watcher = nil
+	defer manager.Close()
 
-	initial, err := reloader.GetCertificate(nil)
+	initial, err := manager.GetCertificate(nil)
 	require.NoError(t, err)
 	require.Equal(t, initial.Certificate[0], mustParseKeyPair(t, cert1, key1).Certificate[0])
 
@@ -142,13 +151,13 @@ func TestReloaderReloadsCertificateFromFallbackPoll(t *testing.T) {
 	require.NoError(t, os.WriteFile(keyFile, key2, 0o600))
 
 	require.Eventually(t, func() bool {
-		current, err := reloader.GetCertificate(nil)
+		current, err := manager.GetCertificate(nil)
 		require.NoError(t, err)
 		return string(current.Certificate[0]) == string(mustParseKeyPair(t, cert2, key2).Certificate[0])
 	}, time.Second, 10*time.Millisecond)
 }
 
-func TestReloaderKeepsPreviousCertificateOnInvalidReload(t *testing.T) {
+func TestManagerKeepsPreviousCertificateOnInvalidReload(t *testing.T) {
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "fullchain.pem")
 	keyFile := filepath.Join(dir, "privkey.pem")
@@ -157,14 +166,15 @@ func TestReloaderKeepsPreviousCertificateOnInvalidReload(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert1, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key1, 0o600))
 
-	reloader, err := NewReloader(t.Context(), ReloaderConfig{
+	manager, err := New(t.Context(), Config{
+		Enabled:  true,
 		CertFile: certFile,
 		KeyFile:  keyFile,
-	})
+	}, Options{})
 	require.NoError(t, err)
-	defer reloader.Close()
+	defer manager.Close()
 
-	previous, err := reloader.GetCertificate(nil)
+	previous, err := manager.GetCertificate(nil)
 	require.NoError(t, err)
 
 	require.NoError(t, os.WriteFile(certFile, []byte("bad cert"), 0o600))
@@ -172,14 +182,14 @@ func TestReloaderKeepsPreviousCertificateOnInvalidReload(t *testing.T) {
 
 	deadline := time.Now().Add(100 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		current, err := reloader.GetCertificate(nil)
+		current, err := manager.GetCertificate(nil)
 		require.NoError(t, err)
 		require.Equal(t, previous.Certificate[0], current.Certificate[0])
 		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-func TestReloaderKeepsPreviousCertificateDuringPartialUpdate(t *testing.T) {
+func TestManagerKeepsPreviousCertificateDuringPartialUpdate(t *testing.T) {
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "fullchain.pem")
 	keyFile := filepath.Join(dir, "privkey.pem")
@@ -189,27 +199,29 @@ func TestReloaderKeepsPreviousCertificateDuringPartialUpdate(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert1, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key1, 0o600))
 
-	reloader, err := NewReloader(t.Context(), ReloaderConfig{
-		CertFile:       certFile,
-		KeyFile:        keyFile,
-		ReloadInterval: 10 * time.Millisecond,
-		RetryInterval:  10 * time.Millisecond,
+	manager, err := New(t.Context(), Config{
+		Enabled:      true,
+		CertFile:     certFile,
+		KeyFile:      keyFile,
+		PollInterval: 10 * time.Millisecond,
+	}, Options{
+		RetryInterval: 10 * time.Millisecond,
 	})
 	require.NoError(t, err)
-	defer reloader.Close()
+	defer manager.Close()
 
-	initial, err := reloader.GetCertificate(nil)
+	initial, err := manager.GetCertificate(nil)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(certFile, cert2, 0o600))
 	time.Sleep(50 * time.Millisecond)
 
-	duringMismatch, err := reloader.GetCertificate(nil)
+	duringMismatch, err := manager.GetCertificate(nil)
 	require.NoError(t, err)
 	require.Equal(t, initial.Certificate[0], duringMismatch.Certificate[0])
 
 	require.NoError(t, os.WriteFile(keyFile, key2, 0o600))
 	require.Eventually(t, func() bool {
-		current, err := reloader.GetCertificate(nil)
+		current, err := manager.GetCertificate(nil)
 		require.NoError(t, err)
 		return string(current.Certificate[0]) == string(mustParseKeyPair(t, cert2, key2).Certificate[0])
 	}, time.Second, 10*time.Millisecond)
@@ -225,18 +237,19 @@ func TestManualReload(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert1, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key1, 0o600))
 
-	reloader, err := NewReloader(t.Context(), ReloaderConfig{
+	manager, err := New(t.Context(), Config{
+		Enabled:  true,
 		CertFile: certFile,
 		KeyFile:  keyFile,
-	})
+	}, Options{})
 	require.NoError(t, err)
-	defer reloader.Close()
+	defer manager.Close()
 
 	require.NoError(t, os.WriteFile(certFile, cert2, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key2, 0o600))
-	require.NoError(t, reloader.Reload(t.Context()))
+	require.NoError(t, manager.Reload(t.Context()))
 
-	current, err := reloader.GetCertificate(nil)
+	current, err := manager.GetCertificate(nil)
 	require.NoError(t, err)
 	require.Equal(t, mustParseKeyPair(t, cert2, key2).Certificate[0], current.Certificate[0])
 }
@@ -249,17 +262,31 @@ func TestTLSConfigUsesConfiguredMinVersion(t *testing.T) {
 	require.NoError(t, os.WriteFile(certFile, cert, 0o600))
 	require.NoError(t, os.WriteFile(keyFile, key, 0o600))
 
-	reloader, err := NewReloader(t.Context(), ReloaderConfig{
-		CertFile:   certFile,
-		KeyFile:    keyFile,
+	manager, err := New(t.Context(), Config{
+		Enabled:  true,
+		CertFile: certFile,
+		KeyFile:  keyFile,
+	}, Options{
 		MinVersion: tls.VersionTLS13,
 	})
 	require.NoError(t, err)
-	defer reloader.Close()
+	defer manager.Close()
 
-	cfg := reloader.TLSConfig()
+	cfg := manager.TLSConfig()
 	require.NotNil(t, cfg.GetCertificate)
 	require.Equal(t, uint16(tls.VersionTLS13), cfg.MinVersion)
+}
+
+func disableFSWatcher(t *testing.T) {
+	t.Helper()
+
+	previous := newFSNotifyWatcher
+	newFSNotifyWatcher = func() (*fsnotify.Watcher, error) {
+		return nil, errors.New("fsnotify disabled for test")
+	}
+	t.Cleanup(func() {
+		newFSNotifyWatcher = previous
+	})
 }
 
 func mustGenerateTLSPair(t *testing.T, commonName string) ([]byte, []byte) {

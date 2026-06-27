@@ -22,7 +22,7 @@ go get github.com/lwmacct/260614-go-pkg-tlsreload
 
 ## 使用
 
-应用配置装配优先使用 `Config` 和 `Manager`：
+应用配置装配使用 `Config` 和 `Options` 创建 `Manager`。`Config` 适合直接嵌入应用配置文件或 CLI flag 结构；`Options` 用于 logger、TLS 最低版本等运行时对象。
 
 ```go
 package main
@@ -38,11 +38,11 @@ import (
 func main() {
 	ctx := context.Background()
 
-	manager, err := tlsreload.NewManager(ctx, tlsreload.Config{
-		Enabled:  true,
-		CertFile: "/etc/ssl/fullchain.pem",
-		KeyFile:  "/etc/ssl/privkey.pem",
-		Interval: 3 * time.Second,
+	manager, err := tlsreload.New(ctx, tlsreload.Config{
+		Enabled:      true,
+		CertFile:     "/etc/ssl/fullchain.pem",
+		KeyFile:      "/etc/ssl/privkey.pem",
+		PollInterval: 3 * time.Second,
 	}, tlsreload.Options{})
 	if err != nil {
 		panic(err)
@@ -59,49 +59,12 @@ func main() {
 }
 ```
 
-只需要底层热重载器时，可以直接使用 `Reloader`：
-
-```go
-package main
-
-import (
-	"context"
-	"crypto/tls"
-	"net/http"
-	"time"
-
-	"github.com/lwmacct/260614-go-pkg-tlsreload/pkg/tlsreload"
-)
-
-func main() {
-	ctx := context.Background()
-
-	reloader := tlsreload.MustNewReloader(ctx, tlsreload.ReloaderConfig{
-		CertFile:       "/etc/ssl/fullchain.pem",
-		KeyFile:        "/etc/ssl/privkey.pem",
-		MinVersion:     tls.VersionTLS12,
-		ReloadInterval: 3 * time.Second,
-	})
-	defer reloader.Close()
-
-	server := &http.Server{
-		Addr:      ":443",
-		Handler:   http.DefaultServeMux,
-		TLSConfig: reloader.TLSConfig(),
-	}
-
-	panic(server.ListenAndServeTLS("", ""))
-}
-```
-
 ## 重载行为
 
-文件系统事件是主要重载触发方式。`Config.Interval` 和
-`ReloaderConfig.ReloadInterval` 只作为兜底轮询间隔，用于覆盖事件丢失或
-watcher 受限的场景。
+文件系统事件是主要重载触发方式。`Config.PollInterval` 只作为兜底轮询间隔，用于覆盖事件丢失或 watcher 受限的场景。
 
-- `Interval`/`ReloadInterval > 0`：按该间隔启用兜底轮询。
-- `Interval`/`ReloadInterval == 0`：禁用兜底轮询；文件系统事件仍会触发重载。
+- `PollInterval > 0`：按该间隔启用兜底轮询。
+- `PollInterval == 0`：禁用兜底轮询；文件系统事件仍会触发重载。
 - `RetryInterval`：兜底轮询重载失败后，下次兜底轮询前的等待时间。
 
 首次加载必须成功。启动后如果重载失败，配置了 logger 时会记录错误，
@@ -111,10 +74,10 @@ watcher 受限的场景。
 
 ```go
 type Config struct {
-	Enabled  bool          `json:"enabled"   desc:"是否启用 HTTPS TLS"`
-	CertFile string        `json:"cert-file" desc:"TLS 证书文件路径"`
-	KeyFile  string        `json:"key-file"  desc:"TLS 私钥文件路径"`
-	Interval time.Duration `json:"interval"  desc:"TLS 证书文件重载兜底轮询间隔，0 表示禁用兜底轮询"`
+	Enabled      bool          `json:"enabled"   desc:"是否启用 HTTPS TLS"`
+	CertFile     string        `json:"cert-file" desc:"TLS 证书文件路径"`
+	KeyFile      string        `json:"key-file"  desc:"TLS 私钥文件路径"`
+	PollInterval time.Duration `json:"poll-interval" desc:"TLS 证书文件重载兜底轮询间隔，0 表示禁用兜底轮询"`
 }
 
 type Options struct {
@@ -122,33 +85,18 @@ type Options struct {
 	RetryInterval time.Duration
 	Logger        *slog.Logger
 }
-
-type ReloaderConfig struct {
-	CertFile       string
-	KeyFile        string
-	ReloadInterval time.Duration
-	RetryInterval  time.Duration
-	MinVersion     uint16
-	Logger         *slog.Logger
-}
 ```
 
-`Options.MinVersion` 和 `ReloaderConfig.MinVersion` 默认是
-`tls.VersionTLS12`。`Options.RetryInterval` 和
-`ReloaderConfig.RetryInterval` 默认是 `2 * time.Second`。
+`Options.MinVersion` 默认是 `tls.VersionTLS12`。`Options.RetryInterval` 默认是 `2 * time.Second`。
 
 主要方法：
 
 ```go
-manager, err := tlsreload.NewManager(ctx, config, options)
-manager = tlsreload.MustNewManager(ctx, config, options)
+manager, err := tlsreload.New(ctx, config, options)
+manager = tlsreload.MustNew(ctx, config, options)
 tlsConfig := manager.TLSConfig()
 enabled := manager.Enabled()
+err = manager.Reload(ctx)
+version := manager.Version()
 manager.Close()
-
-reloader, err := tlsreload.NewReloader(ctx, config)
-reloader = tlsreload.MustNewReloader(ctx, config)
-err = reloader.Reload(ctx)
-version := reloader.Version()
-reloader.Close()
 ```

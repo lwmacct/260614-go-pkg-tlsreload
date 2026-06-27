@@ -28,10 +28,10 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "enabled reload",
 			config: Config{
-				Enabled:  true,
-				CertFile: "cert.pem",
-				KeyFile:  "key.pem",
-				Interval: time.Second,
+				Enabled:      true,
+				CertFile:     "cert.pem",
+				KeyFile:      "key.pem",
+				PollInterval: time.Second,
 			},
 		},
 		{
@@ -50,12 +50,12 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "negative reload interval",
+			name: "negative poll interval",
 			config: Config{
-				Enabled:  true,
-				CertFile: "cert.pem",
-				KeyFile:  "key.pem",
-				Interval: -time.Second,
+				Enabled:      true,
+				CertFile:     "cert.pem",
+				KeyFile:      "key.pem",
+				PollInterval: -time.Second,
 			},
 			wantErr: true,
 		},
@@ -73,26 +73,25 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
-func TestNewManagerDisabled(t *testing.T) {
-	manager, err := NewManager(t.Context(), Config{}, Options{})
+func TestNewDisabled(t *testing.T) {
+	manager, err := New(t.Context(), Config{}, Options{})
 	require.NoError(t, err)
 	require.False(t, manager.Enabled())
 	require.Nil(t, manager.TLSConfig())
-	require.Nil(t, manager.Reloader())
 }
 
-func TestMustNewManagerPanicsOnError(t *testing.T) {
+func TestMustNewPanicsOnError(t *testing.T) {
 	require.Panics(t, func() {
-		MustNewManager(t.Context(), Config{
+		MustNew(t.Context(), Config{
 			Enabled: true,
 		}, Options{})
 	})
 }
 
-func TestMustNewManagerReturnsManager(t *testing.T) {
+func TestMustNewReturnsManager(t *testing.T) {
 	certFile, keyFile := writeManagerTLSFiles(t)
 
-	manager := MustNewManager(t.Context(), Config{
+	manager := MustNew(t.Context(), Config{
 		Enabled:  true,
 		CertFile: certFile,
 		KeyFile:  keyFile,
@@ -100,14 +99,13 @@ func TestMustNewManagerReturnsManager(t *testing.T) {
 	t.Cleanup(manager.Close)
 
 	require.True(t, manager.Enabled())
-	require.NotNil(t, manager.Reloader())
 	require.NotNil(t, manager.TLSConfig())
 }
 
-func TestNewManagerUsesReloaderWithoutFallbackPoll(t *testing.T) {
+func TestNewUsesFileWatcherWithoutFallbackPoll(t *testing.T) {
 	certFile, keyFile := writeManagerTLSFiles(t)
 
-	manager, err := NewManager(t.Context(), Config{
+	manager, err := New(t.Context(), Config{
 		Enabled:  true,
 		CertFile: certFile,
 		KeyFile:  keyFile,
@@ -118,27 +116,25 @@ func TestNewManagerUsesReloaderWithoutFallbackPoll(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(manager.Close)
 	require.True(t, manager.Enabled())
-	require.NotNil(t, manager.Reloader())
 	require.NotNil(t, manager.TLSConfig())
 	require.Equal(t, uint16(tls.VersionTLS13), manager.TLSConfig().MinVersion)
 	_, err = manager.TLSConfig().GetCertificate(nil)
 	require.NoError(t, err)
 }
 
-func TestNewManagerUsesReloader(t *testing.T) {
+func TestNewUsesFallbackPoll(t *testing.T) {
 	certFile, keyFile := writeManagerTLSFiles(t)
 
-	manager, err := NewManager(t.Context(), Config{
-		Enabled:  true,
-		CertFile: certFile,
-		KeyFile:  keyFile,
-		Interval: time.Second,
+	manager, err := New(t.Context(), Config{
+		Enabled:      true,
+		CertFile:     certFile,
+		KeyFile:      keyFile,
+		PollInterval: time.Second,
 	}, Options{})
 
 	require.NoError(t, err)
 	t.Cleanup(manager.Close)
 	require.True(t, manager.Enabled())
-	require.NotNil(t, manager.Reloader())
 	require.NotNil(t, manager.TLSConfig())
 	_, err = manager.TLSConfig().GetCertificate(nil)
 	require.NoError(t, err)
