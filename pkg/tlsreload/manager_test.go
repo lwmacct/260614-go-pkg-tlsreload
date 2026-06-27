@@ -81,6 +81,29 @@ func TestNewManagerDisabled(t *testing.T) {
 	require.Nil(t, manager.Reloader())
 }
 
+func TestMustNewManagerPanicsOnError(t *testing.T) {
+	require.Panics(t, func() {
+		MustNewManager(t.Context(), Config{
+			Enabled: true,
+		}, Options{})
+	})
+}
+
+func TestMustNewManagerReturnsManager(t *testing.T) {
+	certFile, keyFile := writeManagerTLSFiles(t)
+
+	manager := MustNewManager(t.Context(), Config{
+		Enabled:  true,
+		CertFile: certFile,
+		KeyFile:  keyFile,
+	}, Options{})
+	t.Cleanup(manager.Close)
+
+	require.True(t, manager.Enabled())
+	require.NotNil(t, manager.Reloader())
+	require.NotNil(t, manager.TLSConfig())
+}
+
 func TestNewManagerUsesReloaderWithoutFallbackPoll(t *testing.T) {
 	certFile, keyFile := writeManagerTLSFiles(t)
 

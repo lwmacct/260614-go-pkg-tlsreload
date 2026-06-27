@@ -51,6 +51,15 @@ func NewManager(ctx context.Context, config Config, options Options) (*Manager, 
 	}, nil
 }
 
+// MustNewManager is like NewManager but panics if the Manager cannot be created.
+func MustNewManager(ctx context.Context, config Config, options Options) *Manager {
+	manager, err := NewManager(ctx, config, options)
+	if err != nil {
+		panic(err)
+	}
+	return manager
+}
+
 // TLSConfig returns the configured TLS config, or nil when TLS is disabled.
 func (m *Manager) TLSConfig() *tls.Config {
 	if m == nil {

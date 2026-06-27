@@ -141,6 +141,7 @@ type ReloaderConfig struct {
 
 ```go
 manager, err := tlsreload.NewManager(ctx, config, options)
+manager = tlsreload.MustNewManager(ctx, config, options)
 tlsConfig := manager.TLSConfig()
 enabled := manager.Enabled()
 manager.Close()
