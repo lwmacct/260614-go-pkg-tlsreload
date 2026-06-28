@@ -10,7 +10,7 @@
 
 - 使用文件系统事件监听证书和私钥变化。
 - 监听父目录而不是单个文件，可覆盖临时文件写入后 rename 替换的更新方式。
-- 支持 `https://`、`http://` 和通过 adapter 解析的 `op://`、`git://` 证书来源。
+- 支持 `https://`、`http://` 和通过 adapter 解析的 `op://`、`git://`、`s3://` 证书来源。
 - 支持通过配置间隔启用兜底轮询。
 - 部分写入或无效更新时保留上一份有效证书。
 - 支持通过 `Reload(ctx)` 手动触发重载。
@@ -81,11 +81,17 @@ func main() {
 - HTTP URL：`http://example.com/fullchain.pem`，需要 `Options.AllowInsecureHTTP`
 - 1Password secret reference：`op://vault/item/field`
 - Git repository file：`git://repo-name/path/in/repo.pem?ref=main`
+- S3 object：`s3://bucket-name/path/in/bucket.pem?versionId=...`
 
 HTTP(S) URL 支持通过 URL userinfo 设置 Basic Auth。日志会隐藏 URL 中的密码。
 
-`op://` 来源需要通过 `Options.Adapters` 显式注入适配器。主包不直接依赖
-1Password SDK，避免不使用 1Password 的项目被迫启用 CGO 或引入额外依赖。
+## 适配器用法
+
+`op://`、`git://`、`s3://` 等非内建来源需要通过 `Options.Adapters` 显式注入适配器。
+主包只依赖 `tlsreload.Adapter` 接口，不直接依赖各类外部 SDK，避免不使用相关来源的项目
+被迫引入额外依赖。
+
+### 1Password
 
 如果要使用 1Password service account，可引入 `pkg/adapters/op1`：
 
@@ -108,6 +114,8 @@ manager, err := tlsreload.New(ctx, config, tlsreload.Options{
 `Options.Token` 直接传入，或通过 `Options.TokenEnv` 指定环境变量名。同一个 vault
 中可能存在同名 item，生产配置建议使用 item ID 作为 `op://vault/item/field`
 中的 item 段，避免用户临时复制副本时造成名称解析歧义。
+
+### Git
 
 如果要从 Git 仓库读取证书材料，可引入 `pkg/adapters/git`。`git://` URI 中的
 host 是仓库别名，真实仓库 URL 和认证信息通过 adapter options 配置，避免把凭据写进
@@ -144,6 +152,46 @@ manager, err := tlsreload.New(ctx, tlsreload.Config{
 `Reload(ctx)` 触发重新读取。为了确保证书和私钥来自同一个 commit，adapter 默认会把
 同一个仓库和 ref 的解析结果短暂缓存；生产配置更建议使用 tag 或 commit SHA 作为
 `ref`。
+
+### S3
+
+如果要从 S3 或 S3-compatible 对象存储读取证书材料，可引入 `pkg/adapters/s3`。
+`s3://` URI 中只包含 bucket、object key 和可选 `versionId`，region、endpoint 和
+认证信息通过 adapter options 或 AWS SDK 默认配置链提供：
+
+```go
+import (
+	s3adapter "github.com/lwmacct/260614-go-pkg-tlsreload/pkg/adapters/s3"
+	"github.com/lwmacct/260614-go-pkg-tlsreload/pkg/tlsreload"
+)
+
+manager, err := tlsreload.New(ctx, tlsreload.Config{
+	Enabled:  true,
+	CertFile: "s3://infra-certs/prod/fullchain.pem",
+	KeyFile:  "s3://infra-certs/prod/privkey.pem",
+}, tlsreload.Options{
+	Adapters: []tlsreload.Adapter{
+		s3adapter.New(s3adapter.Options{
+			Region: "us-east-1",
+		}),
+	},
+})
+```
+
+对于 MinIO、Cloudflare R2 等 S3-compatible 服务，可配置自定义 endpoint、path-style
+和静态凭据：
+
+```go
+s3adapter.New(s3adapter.Options{
+	Region:       "auto",
+	Endpoint:     "https://s3.example.com",
+	UsePathStyle: true,
+	Credentials:  s3adapter.StaticCredentials("access-key", "secret-key", ""),
+})
+```
+
+如果应用已经自行创建了 AWS S3 client，也可以通过 `Options.Client` 直接注入。
+S3 对象变化依赖 `PollInterval` 或手动 `Reload(ctx)` 触发重新读取。
 
 ## API
 
