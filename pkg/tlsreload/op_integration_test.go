@@ -1,6 +1,6 @@
 //go:build op_integration
 
-package tlsreload
+package tlsreload_test
 
 import (
 	"crypto/tls"
@@ -9,6 +9,9 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/lwmacct/260614-go-pkg-tlsreload/pkg/adapters/op1"
+	"github.com/lwmacct/260614-go-pkg-tlsreload/pkg/tlsreload"
 )
 
 const (
@@ -20,16 +23,25 @@ func TestOnePasswordServiceAccountIntegration(t *testing.T) {
 	tests := []struct {
 		name    string
 		envName string
-		options Options
+		options tlsreload.Options
 	}{
 		{
 			name:    "custom token env",
 			envName: "OP_TOKEN",
-			options: Options{OnePasswordTokenEnv: "OP_TOKEN"},
+			options: tlsreload.Options{
+				Adapters: []tlsreload.Adapter{
+					op1.New(op1.Options{TokenEnv: "OP_TOKEN"}),
+				},
+			},
 		},
 		{
 			name:    "default token env",
-			envName: defaultOnePasswordTokenEnv,
+			envName: op1.DefaultTokenEnv,
+			options: tlsreload.Options{
+				Adapters: []tlsreload.Adapter{
+					op1.New(op1.Options{}),
+				},
+			},
 		},
 	}
 
@@ -39,7 +51,7 @@ func TestOnePasswordServiceAccountIntegration(t *testing.T) {
 				t.Skipf("%s is empty", test.envName)
 			}
 
-			manager, err := New(t.Context(), Config{
+			manager, err := tlsreload.New(t.Context(), tlsreload.Config{
 				Enabled:  true,
 				CertFile: onePasswordIntegrationCert,
 				KeyFile:  onePasswordIntegrationKey,
@@ -72,7 +84,7 @@ func TestOnePasswordServiceAccountIntegration(t *testing.T) {
 	}
 }
 
-func assertTLSHandshakeUsesManagerCertificate(t *testing.T, manager *Manager) {
+func assertTLSHandshakeUsesManagerCertificate(t *testing.T, manager *tlsreload.Manager) {
 	t.Helper()
 
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", manager.TLSConfig())

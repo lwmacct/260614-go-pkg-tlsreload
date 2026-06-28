@@ -21,14 +21,13 @@ const (
 
 // Options controls TLS runtime behavior that is not normally sourced from config files.
 type Options struct {
-	MinVersion          uint16
-	RetryInterval       time.Duration
-	PollJitterRatio     float64
-	Logger              *slog.Logger
-	AllowInsecureHTTP   bool
-	HTTPClient          *http.Client
-	OnePasswordToken    string
-	OnePasswordTokenEnv string
+	MinVersion        uint16
+	RetryInterval     time.Duration
+	PollJitterRatio   float64
+	Logger            *slog.Logger
+	AllowInsecureHTTP bool
+	HTTPClient        *http.Client
+	Adapters          []Adapter
 }
 
 // Manager owns an optional hot-reloadable TLS certificate source.
@@ -90,6 +89,11 @@ func New(ctx context.Context, config Config, options Options) (*Manager, error) 
 		return nil, errMissingTLSFiles
 	}
 
+	adapters, err := newAdapterMap(options.Adapters)
+	if err != nil {
+		return nil, err
+	}
+
 	managerCtx, cancel := context.WithCancel(ctx)
 	manager := &Manager{
 		enabled:         true,
@@ -101,10 +105,9 @@ func New(ctx context.Context, config Config, options Options) (*Manager, error) 
 		minVersion:      options.MinVersion,
 		logger:          options.Logger,
 		loaderOptions: loaderOptions{
-			allowInsecureHTTP:   options.AllowInsecureHTTP,
-			httpClient:          options.HTTPClient,
-			onePasswordToken:    options.OnePasswordToken,
-			onePasswordTokenEnv: options.OnePasswordTokenEnv,
+			allowInsecureHTTP: options.AllowInsecureHTTP,
+			httpClient:        options.HTTPClient,
+			adapters:          adapters,
 		},
 		cancel: cancel,
 	}

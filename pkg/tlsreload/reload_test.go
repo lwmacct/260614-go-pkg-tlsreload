@@ -136,20 +136,22 @@ func TestNewLoadsCertificateFromHTTPWhenAllowed(t *testing.T) {
 	require.Equal(t, mustParseKeyPair(t, cert, key).Certificate[0], current.Certificate[0])
 }
 
-func TestNewLoadsCertificateFromOnePassword(t *testing.T) {
+func TestNewLoadsCertificateFromAdapter(t *testing.T) {
 	cert, key := mustGenerateTLSPair(t, "op")
-	restore := stubOnePasswordResolver(t, map[string]string{
-		"op://vault/item/fullchain": string(cert),
-		"op://vault/item/privkey":   string(key),
-	})
-	defer restore()
+	adapter := staticAdapter{
+		scheme: "op",
+		secrets: map[string]string{
+			"op://vault/item/fullchain": string(cert),
+			"op://vault/item/privkey":   string(key),
+		},
+	}
 
 	manager, err := New(t.Context(), Config{
 		Enabled:  true,
 		CertFile: "op://vault/item/fullchain",
 		KeyFile:  "op://vault/item/privkey",
 	}, Options{
-		OnePasswordToken: "test-token",
+		Adapters: []Adapter{adapter},
 	})
 	require.NoError(t, err)
 	defer manager.Close()
@@ -160,32 +162,42 @@ func TestNewLoadsCertificateFromOnePassword(t *testing.T) {
 	require.Nil(t, manager.watcher)
 }
 
-func TestManagerKeepsPreviousCertificateOnOnePasswordAmbiguousReload(t *testing.T) {
+func TestNewRejectsAdapterSchemeWithoutAdapter(t *testing.T) {
+	_, err := New(t.Context(), Config{
+		Enabled:  true,
+		CertFile: "op://vault/item/fullchain",
+		KeyFile:  "op://vault/item/privkey",
+	}, Options{})
+	require.ErrorContains(t, err, `unsupported tls material scheme "op"`)
+}
+
+func TestManagerKeepsPreviousCertificateOnAdapterReloadError(t *testing.T) {
 	cert, key := mustGenerateTLSPair(t, "op-stable")
 	ambiguousErr := errors.New("more than one item matched the secret reference query")
 	ambiguous := false
-	restore := stubOnePasswordResolverFunc(t, func(location string, options loaderOptions) (string, error) {
-		require.NotEmpty(t, options.onePasswordToken)
-		if ambiguous {
-			return "", ambiguousErr
-		}
-		switch location {
-		case "op://vault/item/fullchain":
-			return string(cert), nil
-		case "op://vault/item/privkey":
-			return string(key), nil
-		default:
-			return "", errors.New("secret not found")
-		}
-	})
-	defer restore()
+	adapter := adapterFunc{
+		scheme: "op",
+		read: func(_ context.Context, location string) ([]byte, error) {
+			if ambiguous {
+				return nil, ambiguousErr
+			}
+			switch location {
+			case "op://vault/item/fullchain":
+				return cert, nil
+			case "op://vault/item/privkey":
+				return key, nil
+			default:
+				return nil, errors.New("secret not found")
+			}
+		},
+	}
 
 	manager, err := New(t.Context(), Config{
 		Enabled:  true,
 		CertFile: "op://vault/item/fullchain",
 		KeyFile:  "op://vault/item/privkey",
 	}, Options{
-		OnePasswordToken: "test-token",
+		Adapters: []Adapter{adapter},
 	})
 	require.NoError(t, err)
 	defer manager.Close()
@@ -474,29 +486,34 @@ func (s *tlsMaterialServer) HTTPURL(path string) string {
 	return parsed.String()
 }
 
-func stubOnePasswordResolver(t *testing.T, secrets map[string]string) func() {
-	t.Helper()
-
-	return stubOnePasswordResolverFunc(t, func(location string, options loaderOptions) (string, error) {
-		secret, ok := secrets[location]
-		if !ok {
-			return "", errors.New("secret not found")
-		}
-		return secret, nil
-	})
+type staticAdapter struct {
+	scheme  string
+	secrets map[string]string
 }
 
-func stubOnePasswordResolverFunc(t *testing.T, resolver func(location string, options loaderOptions) (string, error)) func() {
-	t.Helper()
+func (a staticAdapter) Scheme() string {
+	return a.scheme
+}
 
-	previous := resolveOnePasswordLocation
-	resolveOnePasswordLocation = func(_ context.Context, location string, options loaderOptions) (string, error) {
-		require.NotEmpty(t, options.onePasswordToken)
-		return resolver(location, options)
+func (a staticAdapter) Read(_ context.Context, location string) ([]byte, error) {
+	secret, ok := a.secrets[location]
+	if !ok {
+		return nil, errors.New("secret not found")
 	}
-	return func() {
-		resolveOnePasswordLocation = previous
-	}
+	return []byte(secret), nil
+}
+
+type adapterFunc struct {
+	scheme string
+	read   func(context.Context, string) ([]byte, error)
+}
+
+func (a adapterFunc) Scheme() string {
+	return a.scheme
+}
+
+func (a adapterFunc) Read(ctx context.Context, location string) ([]byte, error) {
+	return a.read(ctx, location)
 }
 
 func mustGenerateTLSPair(t *testing.T, commonName string) ([]byte, []byte) {

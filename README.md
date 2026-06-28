@@ -2,7 +2,7 @@
 
 面向 Go 服务的文件证书热重载工具。
 
-`tlsreload` 会从本地文件、HTTP(S) 或 1Password 加载证书和私钥，为 `net/http` 提供可直接使用的
+`tlsreload` 会从本地文件、HTTP(S) 或外部 adapter 加载证书和私钥，为 `net/http` 提供可直接使用的
 `tls.Config`。后续重载失败时，会继续使用上一份有效证书，避免服务因为
 证书文件短暂不完整或内容错误而中断 TLS 握手。
 
@@ -10,7 +10,7 @@
 
 - 使用文件系统事件监听证书和私钥变化。
 - 监听父目录而不是单个文件，可覆盖临时文件写入后 rename 替换的更新方式。
-- 支持 `https://`、`http://` 和 `op://` 证书来源。
+- 支持 `https://`、`http://` 和通过 adapter 解析的 `op://` 证书来源。
 - 支持通过配置间隔启用兜底轮询。
 - 部分写入或无效更新时保留上一份有效证书。
 - 支持通过 `Reload(ctx)` 手动触发重载。
@@ -83,9 +83,28 @@ func main() {
 
 HTTP(S) URL 支持通过 URL userinfo 设置 Basic Auth。日志会隐藏 URL 中的密码。
 
-1Password 使用官方 Go SDK 和 service account token。默认从
-`OP_SERVICE_ACCOUNT_TOKEN` 读取 token，也可以通过 `Options.OnePasswordToken`
-直接传入，或通过 `Options.OnePasswordTokenEnv` 指定环境变量名。同一个 vault
+`op://` 来源需要通过 `Options.Adapters` 显式注入适配器。主包不直接依赖
+1Password SDK，避免不使用 1Password 的项目被迫启用 CGO 或引入额外依赖。
+
+如果要使用 1Password service account，可引入 `pkg/adapters/op1`：
+
+```go
+import (
+	"github.com/lwmacct/260614-go-pkg-tlsreload/pkg/adapters/op1"
+	"github.com/lwmacct/260614-go-pkg-tlsreload/pkg/tlsreload"
+)
+
+manager, err := tlsreload.New(ctx, config, tlsreload.Options{
+	Adapters: []tlsreload.Adapter{
+		op1.New(op1.Options{
+			TokenEnv: op1.DefaultTokenEnv,
+		}),
+	},
+})
+```
+
+`op1.Adapter` 默认从 `OP_SERVICE_ACCOUNT_TOKEN` 读取 token，也可以通过
+`Options.Token` 直接传入，或通过 `Options.TokenEnv` 指定环境变量名。同一个 vault
 中可能存在同名 item，生产配置建议使用 item ID 作为 `op://vault/item/field`
 中的 item 段，避免用户临时复制副本时造成名称解析歧义。
 
@@ -100,14 +119,13 @@ type Config struct {
 }
 
 type Options struct {
-	MinVersion          uint16
-	RetryInterval       time.Duration
-	PollJitterRatio     float64
-	Logger              *slog.Logger
-	AllowInsecureHTTP   bool
-	HTTPClient          *http.Client
-	OnePasswordToken    string
-	OnePasswordTokenEnv string
+	MinVersion        uint16
+	RetryInterval     time.Duration
+	PollJitterRatio   float64
+	Logger            *slog.Logger
+	AllowInsecureHTTP bool
+	HTTPClient        *http.Client
+	Adapters          []Adapter
 }
 ```
 

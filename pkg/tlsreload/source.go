@@ -10,24 +10,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	onepassword "github.com/1password/onepassword-sdk-go"
 )
 
 const (
-	// #nosec G101 -- this is an environment variable name, not a token value.
-	defaultOnePasswordTokenEnv = "OP_SERVICE_ACCOUNT_TOKEN"
-	maxTLSMaterialBytes        = 4 << 20
+	maxTLSMaterialBytes = 4 << 20
 )
 
 type loaderOptions struct {
-	allowInsecureHTTP   bool
-	httpClient          *http.Client
-	onePasswordToken    string
-	onePasswordTokenEnv string
+	allowInsecureHTTP bool
+	httpClient        *http.Client
+	adapters          map[string]Adapter
 }
-
-var resolveOnePasswordLocation = defaultResolveOnePasswordLocation
 
 func readTLSLocations(ctx context.Context, certLocation, keyLocation string, options loaderOptions) ([]byte, []byte, error) {
 	certPEM, err := readTLSLocation(ctx, certLocation, options)
@@ -65,14 +58,19 @@ func readTLSLocation(ctx context.Context, location string, options loaderOptions
 			return nil, errors.New("http tls material source requires AllowInsecureHTTP")
 		}
 		return readHTTPLocation(ctx, parsed, options)
-	case "op":
-		secret, err := resolveOnePasswordLocation(ctx, location, options)
+	default:
+		adapter := options.adapters[scheme]
+		if adapter == nil {
+			return nil, fmt.Errorf("unsupported tls material scheme %q", scheme)
+		}
+		body, err := adapter.Read(ctx, location)
 		if err != nil {
 			return nil, err
 		}
-		return []byte(secret), nil
-	default:
-		return nil, fmt.Errorf("unsupported tls material scheme %q", scheme)
+		if len(body) > maxTLSMaterialBytes {
+			return nil, fmt.Errorf("%s tls material source exceeds %d bytes", scheme, maxTLSMaterialBytes)
+		}
+		return body, nil
 	}
 }
 
@@ -116,30 +114,6 @@ func readHTTPLocation(ctx context.Context, parsed *url.URL, options loaderOption
 	return body, nil
 }
 
-func defaultResolveOnePasswordLocation(ctx context.Context, location string, options loaderOptions) (string, error) {
-	token := options.onePasswordToken
-	if token == "" {
-		tokenEnv := options.onePasswordTokenEnv
-		if tokenEnv == "" {
-			tokenEnv = defaultOnePasswordTokenEnv
-		}
-		token = os.Getenv(tokenEnv)
-		if token == "" {
-			return "", fmt.Errorf("1password service account token environment variable %s is empty", tokenEnv)
-		}
-	}
-
-	client, err := onepassword.NewClient(
-		ctx,
-		onepassword.WithServiceAccountToken(token),
-		onepassword.WithIntegrationInfo("tlsreload", "0"),
-	)
-	if err != nil {
-		return "", err
-	}
-	return client.Secrets().Resolve(ctx, location)
-}
-
 func normalizeTLSLocation(value string) (string, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -162,10 +136,10 @@ func normalizeTLSLocation(value string) (string, error) {
 			return "", errors.New("tls file uri path is required")
 		}
 		return parsed.String(), nil
-	case "http", "https", "op":
+	case "http", "https":
 		return trimmed, nil
 	default:
-		return "", fmt.Errorf("unsupported tls material scheme %q", scheme)
+		return trimmed, nil
 	}
 }
 
