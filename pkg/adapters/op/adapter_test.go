@@ -10,7 +10,7 @@ import (
 )
 
 func TestAdapterScheme(t *testing.T) {
-	require.Equal(t, "op", New(Options{}).Scheme())
+	require.Equal(t, []string{"op"}, New(Options{}).Schemes())
 }
 
 func TestAdapterReadsWithExplicitToken(t *testing.T) {

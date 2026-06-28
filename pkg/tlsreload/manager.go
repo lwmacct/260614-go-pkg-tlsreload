@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	fileadapter "github.com/lwmacct/260614-go-pkg-tlsreload/pkg/adapters/file"
+	httpadapter "github.com/lwmacct/260614-go-pkg-tlsreload/pkg/adapters/http"
 )
 
 const (
@@ -21,13 +23,14 @@ const (
 
 // Options controls TLS runtime behavior that is not normally sourced from config files.
 type Options struct {
-	MinVersion        uint16
-	RetryInterval     time.Duration
-	PollJitterRatio   float64
-	Logger            *slog.Logger
-	AllowInsecureHTTP bool
-	HTTPClient        *http.Client
-	Adapters          []Adapter
+	MinVersion             uint16
+	RetryInterval          time.Duration
+	PollJitterRatio        float64
+	Logger                 *slog.Logger
+	AllowInsecureHTTP      bool
+	HTTPClient             *http.Client
+	Adapters               []Adapter
+	DisableDefaultAdapters bool
 }
 
 // Manager owns an optional hot-reloadable TLS certificate source.
@@ -41,6 +44,7 @@ type Manager struct {
 	minVersion      uint16
 	logger          *slog.Logger
 	watcher         *fsnotify.Watcher
+	watchPaths      []string
 	loaderOptions   loaderOptions
 
 	reloadMu sync.Mutex
@@ -89,7 +93,7 @@ func New(ctx context.Context, config Config, options Options) (*Manager, error) 
 		return nil, errMissingTLSFiles
 	}
 
-	adapters, err := newAdapterMap(options.Adapters)
+	adapters, err := newAdapterMap(effectiveAdapters(options))
 	if err != nil {
 		return nil, err
 	}
@@ -105,9 +109,7 @@ func New(ctx context.Context, config Config, options Options) (*Manager, error) 
 		minVersion:      options.MinVersion,
 		logger:          options.Logger,
 		loaderOptions: loaderOptions{
-			allowInsecureHTTP: options.AllowInsecureHTTP,
-			httpClient:        options.HTTPClient,
-			adapters:          adapters,
+			adapters: adapters,
 		},
 		cancel: cancel,
 	}
@@ -134,6 +136,21 @@ func New(ctx context.Context, config Config, options Options) (*Manager, error) 
 	}
 
 	return manager, nil
+}
+
+func effectiveAdapters(options Options) []Adapter {
+	if options.DisableDefaultAdapters {
+		return append([]Adapter(nil), options.Adapters...)
+	}
+	adapters := make([]Adapter, 0, 2+len(options.Adapters))
+	adapters = append(adapters,
+		fileadapter.New(),
+		httpadapter.New(httpadapter.Options{
+			AllowInsecure: options.AllowInsecureHTTP,
+			Client:        options.HTTPClient,
+		}),
+	)
+	return append(adapters, options.Adapters...)
 }
 
 // MustNew is like New but panics if the Manager cannot be created.

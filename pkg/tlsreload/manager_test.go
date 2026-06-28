@@ -142,6 +142,19 @@ func TestNewUsesFallbackPoll(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestNewCanDisableDefaultAdapters(t *testing.T) {
+	certFile, keyFile := writeManagerTLSFiles(t)
+
+	_, err := New(t.Context(), Config{
+		Enabled:  true,
+		CertFile: certFile,
+		KeyFile:  keyFile,
+	}, Options{
+		DisableDefaultAdapters: true,
+	})
+	require.ErrorContains(t, err, `unsupported tls material scheme ""`)
+}
+
 func TestNewUsesConfiguredPollJitter(t *testing.T) {
 	certFile, keyFile := writeManagerTLSFiles(t)
 

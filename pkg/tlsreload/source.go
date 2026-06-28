@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -17,9 +14,7 @@ const (
 )
 
 type loaderOptions struct {
-	allowInsecureHTTP bool
-	httpClient        *http.Client
-	adapters          map[string]Adapter
+	adapters map[string]Adapter
 }
 
 func readTLSLocations(ctx context.Context, certLocation, keyLocation string, options loaderOptions) ([]byte, []byte, error) {
@@ -39,77 +34,21 @@ func readTLSLocation(ctx context.Context, location string, options loaderOptions
 		return nil, err
 	}
 
-	parsed, scheme := parseLocation(location)
-	switch scheme {
-	case "":
-		// #nosec G304 -- certificate paths are provided by the embedding application configuration.
-		return os.ReadFile(location)
-	case "file":
-		path, ok := localFilePath(location)
-		if !ok {
-			return nil, fmt.Errorf("invalid file uri %q", location)
-		}
-		// #nosec G304 -- certificate paths are provided by the embedding application configuration.
-		return os.ReadFile(path)
-	case "https":
-		return readHTTPLocation(ctx, parsed, options)
-	case "http":
-		if !options.allowInsecureHTTP {
-			return nil, errors.New("http tls material source requires AllowInsecureHTTP")
-		}
-		return readHTTPLocation(ctx, parsed, options)
-	default:
-		adapter := options.adapters[scheme]
-		if adapter == nil {
-			return nil, fmt.Errorf("unsupported tls material scheme %q", scheme)
-		}
-		body, err := adapter.Read(ctx, location)
-		if err != nil {
-			return nil, err
-		}
-		if len(body) > maxTLSMaterialBytes {
-			return nil, fmt.Errorf("%s tls material source exceeds %d bytes", scheme, maxTLSMaterialBytes)
-		}
-		return body, nil
+	_, scheme := parseLocation(location)
+	adapter := options.adapters[scheme]
+	if adapter == nil {
+		return nil, fmt.Errorf("unsupported tls material scheme %q", scheme)
 	}
-}
-
-func readHTTPLocation(ctx context.Context, parsed *url.URL, options loaderOptions) ([]byte, error) {
-	client := options.httpClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-
-	requestURL := *parsed
-	user := requestURL.User
-	requestURL.User = nil
-
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	if user != nil {
-		password, _ := user.Password()
-		request.SetBasicAuth(user.Username(), password)
-	}
-
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = response.Body.Close() }()
-
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("http tls material source returned %s", response.Status)
-	}
-
-	limited := io.LimitReader(response.Body, maxTLSMaterialBytes+1)
-	body, err := io.ReadAll(limited)
+	body, err := adapter.Read(ctx, location)
 	if err != nil {
 		return nil, err
 	}
 	if len(body) > maxTLSMaterialBytes {
-		return nil, fmt.Errorf("http tls material source exceeds %d bytes", maxTLSMaterialBytes)
+		source := scheme
+		if source == "" {
+			source = "file"
+		}
+		return nil, fmt.Errorf("%s tls material source exceeds %d bytes", source, maxTLSMaterialBytes)
 	}
 	return body, nil
 }
@@ -140,21 +79,6 @@ func normalizeTLSLocation(value string) (string, error) {
 		return trimmed, nil
 	default:
 		return trimmed, nil
-	}
-}
-
-func localFilePath(location string) (string, bool) {
-	parsed, scheme := parseLocation(location)
-	switch scheme {
-	case "":
-		return location, true
-	case "file":
-		if parsed.Host != "" && parsed.Host != "localhost" {
-			return "", false
-		}
-		return filepath.Clean(parsed.Path), true
-	default:
-		return "", false
 	}
 }
 

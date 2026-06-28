@@ -49,8 +49,8 @@ type Options struct {
 	IntegrationVersion string
 }
 
-func (a Adapter) Scheme() string {
-	return "op"
+func (a Adapter) Schemes() []string {
+	return []string{"op"}
 }
 
 func (a Adapter) Read(ctx context.Context, location string) ([]byte, error) {

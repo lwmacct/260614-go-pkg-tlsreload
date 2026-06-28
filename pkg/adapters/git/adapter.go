@@ -65,8 +65,8 @@ func New(options Options) *Adapter {
 	}
 }
 
-func (a *Adapter) Scheme() string {
-	return "git"
+func (a *Adapter) Schemes() []string {
+	return []string{"git"}
 }
 
 func (a *Adapter) Read(ctx context.Context, location string) ([]byte, error) {

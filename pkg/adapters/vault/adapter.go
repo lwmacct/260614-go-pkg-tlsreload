@@ -58,8 +58,8 @@ func New(options Options) *Adapter {
 	}
 }
 
-func (a *Adapter) Scheme() string {
-	return "vault"
+func (a *Adapter) Schemes() []string {
+	return []string{"vault"}
 }
 
 func (a *Adapter) Read(ctx context.Context, location string) ([]byte, error) {

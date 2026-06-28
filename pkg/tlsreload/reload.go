@@ -58,15 +58,17 @@ func (m *Manager) Version() string {
 }
 
 func (m *Manager) newWatcher() (*fsnotify.Watcher, error) {
-	dirs := make(map[string]struct{})
-	if certFile, ok := localFilePath(m.certFile); ok {
-		dirs[filepath.Dir(certFile)] = struct{}{}
+	paths, err := m.localWatchPaths()
+	if err != nil {
+		return nil, err
 	}
-	if keyFile, ok := localFilePath(m.keyFile); ok {
-		dirs[filepath.Dir(keyFile)] = struct{}{}
-	}
-	if len(dirs) == 0 {
+	if len(paths) == 0 {
 		return nil, errNoLocalWatchSources
+	}
+
+	dirs := make(map[string]struct{})
+	for _, watchPath := range paths {
+		dirs[filepath.Dir(watchPath)] = struct{}{}
 	}
 
 	watcher, err := newFSNotifyWatcher()
@@ -80,7 +82,34 @@ func (m *Manager) newWatcher() (*fsnotify.Watcher, error) {
 			return nil, fmt.Errorf("watch tls directory %q: %w", dir, err)
 		}
 	}
+	m.watchPaths = paths
 	return watcher, nil
+}
+
+func (m *Manager) localWatchPaths() ([]string, error) {
+	seen := make(map[string]struct{})
+	var paths []string
+	for _, location := range []string{m.certFile, m.keyFile} {
+		_, scheme := parseLocation(location)
+		adapter := m.loaderOptions.adapters[scheme]
+		watcher, ok := adapter.(Watcher)
+		if !ok {
+			continue
+		}
+		watchPaths, err := watcher.WatchPaths(location)
+		if err != nil {
+			return nil, err
+		}
+		for _, watchPath := range watchPaths {
+			cleaned := filepath.Clean(watchPath)
+			if _, exists := seen[cleaned]; exists {
+				continue
+			}
+			seen[cleaned] = struct{}{}
+			paths = append(paths, cleaned)
+		}
+	}
+	return paths, nil
 }
 
 func (m *Manager) backgroundLoop(ctx context.Context) {
@@ -138,9 +167,12 @@ func (m *Manager) shouldReloadForEvent(event fsnotify.Event) bool {
 		!event.Has(fsnotify.Remove) {
 		return false
 	}
-	certFile, certLocal := localFilePath(m.certFile)
-	keyFile, keyLocal := localFilePath(m.keyFile)
-	return (certLocal && samePath(event.Name, certFile)) || (keyLocal && samePath(event.Name, keyFile))
+	for _, watchPath := range m.watchPaths {
+		if samePath(event.Name, watchPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func samePath(left, right string) bool {

@@ -491,8 +491,8 @@ type staticAdapter struct {
 	secrets map[string]string
 }
 
-func (a staticAdapter) Scheme() string {
-	return a.scheme
+func (a staticAdapter) Schemes() []string {
+	return []string{a.scheme}
 }
 
 func (a staticAdapter) Read(_ context.Context, location string) ([]byte, error) {
@@ -508,8 +508,8 @@ type adapterFunc struct {
 	read   func(context.Context, string) ([]byte, error)
 }
 
-func (a adapterFunc) Scheme() string {
-	return a.scheme
+func (a adapterFunc) Schemes() []string {
+	return []string{a.scheme}
 }
 
 func (a adapterFunc) Read(ctx context.Context, location string) ([]byte, error) {
