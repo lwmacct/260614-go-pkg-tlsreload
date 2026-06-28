@@ -10,7 +10,7 @@
 
 - 使用文件系统事件监听证书和私钥变化。
 - 监听父目录而不是单个文件，可覆盖临时文件写入后 rename 替换的更新方式。
-- 支持 `https://`、`http://` 和通过 adapter 解析的 `op://` 证书来源。
+- 支持 `https://`、`http://` 和通过 adapter 解析的 `op://`、`git://` 证书来源。
 - 支持通过配置间隔启用兜底轮询。
 - 部分写入或无效更新时保留上一份有效证书。
 - 支持通过 `Reload(ctx)` 手动触发重载。
@@ -80,6 +80,7 @@ func main() {
 - HTTPS URL：`https://user:pass@example.com/fullchain.pem`
 - HTTP URL：`http://example.com/fullchain.pem`，需要 `Options.AllowInsecureHTTP`
 - 1Password secret reference：`op://vault/item/field`
+- Git repository file：`git://repo-name/path/in/repo.pem?ref=main`
 
 HTTP(S) URL 支持通过 URL userinfo 设置 Basic Auth。日志会隐藏 URL 中的密码。
 
@@ -107,6 +108,42 @@ manager, err := tlsreload.New(ctx, config, tlsreload.Options{
 `Options.Token` 直接传入，或通过 `Options.TokenEnv` 指定环境变量名。同一个 vault
 中可能存在同名 item，生产配置建议使用 item ID 作为 `op://vault/item/field`
 中的 item 段，避免用户临时复制副本时造成名称解析歧义。
+
+如果要从 Git 仓库读取证书材料，可引入 `pkg/adapters/git`。`git://` URI 中的
+host 是仓库别名，真实仓库 URL 和认证信息通过 adapter options 配置，避免把凭据写进
+证书路径配置：
+
+```go
+import (
+	gitadapter "github.com/lwmacct/260614-go-pkg-tlsreload/pkg/adapters/git"
+	"github.com/lwmacct/260614-go-pkg-tlsreload/pkg/tlsreload"
+)
+
+manager, err := tlsreload.New(ctx, tlsreload.Config{
+	Enabled:  true,
+	CertFile: "git://infra-certs/prod/fullchain.pem?ref=main",
+	KeyFile:  "git://infra-certs/prod/privkey.pem?ref=main",
+}, tlsreload.Options{
+	Adapters: []tlsreload.Adapter{
+		gitadapter.New(gitadapter.Options{
+			CacheDir: "/var/cache/tlsreload/git",
+			Repositories: map[string]gitadapter.Repository{
+				"infra-certs": {
+					URL:        "git@github.com:example/infra-certs.git",
+					DefaultRef: "main",
+				},
+			},
+		}),
+	},
+})
+```
+
+`gitadapter.Repository.Auth` 支持传入 go-git 的 auth method，也可以使用
+`gitadapter.BasicAuth`、`gitadapter.TokenAuth`、`gitadapter.SSHKey` 或
+`gitadapter.SSHKeyFromFile`。Git 远端变化依赖 `PollInterval` 或手动
+`Reload(ctx)` 触发重新读取。为了确保证书和私钥来自同一个 commit，adapter 默认会把
+同一个仓库和 ref 的解析结果短暂缓存；生产配置更建议使用 tag 或 commit SHA 作为
+`ref`。
 
 ## API
 
