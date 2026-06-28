@@ -1,6 +1,6 @@
 //go:build op_integration
 
-package tlsreload_test
+package op_test
 
 import (
 	"crypto/tls"
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lwmacct/260614-go-pkg-tlsreload/pkg/adapters/op1"
+	"github.com/lwmacct/260614-go-pkg-tlsreload/pkg/adapters/op"
 	"github.com/lwmacct/260614-go-pkg-tlsreload/pkg/tlsreload"
 )
 
@@ -30,16 +30,16 @@ func TestOnePasswordServiceAccountIntegration(t *testing.T) {
 			envName: "OP_TOKEN",
 			options: tlsreload.Options{
 				Adapters: []tlsreload.Adapter{
-					op1.New(op1.Options{TokenEnv: "OP_TOKEN"}),
+					op.New(op.Options{TokenEnv: "OP_TOKEN"}),
 				},
 			},
 		},
 		{
 			name:    "default token env",
-			envName: op1.DefaultTokenEnv,
+			envName: op.DefaultTokenEnv,
 			options: tlsreload.Options{
 				Adapters: []tlsreload.Adapter{
-					op1.New(op1.Options{}),
+					op.New(op.Options{}),
 				},
 			},
 		},

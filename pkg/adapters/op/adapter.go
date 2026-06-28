@@ -1,4 +1,4 @@
-package op1
+package op
 
 import (
 	"context"
@@ -14,6 +14,21 @@ const (
 	DefaultIntegrationName    = "tlsreload"
 	DefaultIntegrationVersion = "0"
 )
+
+var newSecretsResolver = func(
+	ctx context.Context,
+	token, integrationName, integrationVersion string,
+) (opsdk.SecretsAPI, error) {
+	client, err := opsdk.NewClient(
+		ctx,
+		opsdk.WithServiceAccountToken(token),
+		opsdk.WithIntegrationInfo(integrationName, integrationVersion),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return client.Secrets(), nil
+}
 
 // Adapter reads op:// secret references through a 1Password service account.
 type Adapter struct {
@@ -60,15 +75,11 @@ func (a Adapter) Read(ctx context.Context, location string) ([]byte, error) {
 		integrationVersion = DefaultIntegrationVersion
 	}
 
-	client, err := opsdk.NewClient(
-		ctx,
-		opsdk.WithServiceAccountToken(token),
-		opsdk.WithIntegrationInfo(integrationName, integrationVersion),
-	)
+	secrets, err := newSecretsResolver(ctx, token, integrationName, integrationVersion)
 	if err != nil {
 		return nil, err
 	}
-	secret, err := client.Secrets().Resolve(ctx, location)
+	secret, err := secrets.Resolve(ctx, location)
 	if err != nil {
 		return nil, err
 	}
