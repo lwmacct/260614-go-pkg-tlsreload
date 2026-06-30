@@ -60,6 +60,15 @@ linters:
     nestif:
       min-complexity: 3 # JSON 解析等场景允许适度嵌套
 
+  exclusions:
+    rules:
+      # Keep github.com/1password/onepassword-sdk-go pinned to v0.3.1.
+      # Newer versions introduced Desktop App Integration backed by cgo.
+      - path: go\.mod
+        linters:
+          - gomoddirectives
+        text: "replacement are not allowed: github.com/1password/onepassword-sdk-go"
+
 formatters:
   enable:
     - gofmt

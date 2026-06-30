@@ -3,7 +3,7 @@ module github.com/lwmacct/260614-go-pkg-tlsreload
 go 1.26.4
 
 require (
-	github.com/1password/onepassword-sdk-go v0.4.0
+	github.com/1password/onepassword-sdk-go v0.3.1
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.26
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.25
@@ -13,6 +13,8 @@ require (
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/stretchr/testify v1.11.1
 )
+
+replace github.com/1password/onepassword-sdk-go => github.com/1password/onepassword-sdk-go v0.3.1
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
